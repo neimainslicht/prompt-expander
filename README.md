@@ -17,8 +17,10 @@ A Python application that transforms short, simple prompts into detailed, high-q
 
 ```text
 A futuristic city
+```
 
 ### Output
  
 ```text
 A sprawling futuristic megacity at sunset, featuring towering neon skyscrapers, flying vehicles weaving between buildings, holographic advertisements illuminating the skyline, bustling streets filled with diverse crowds, cinematic atmosphere, ultra-detailed, realistic lighting, highly immersive environment.
+```
