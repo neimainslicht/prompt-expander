@@ -5,6 +5,7 @@ from google.genai.errors import APIError
 from tenacity import (
     retry, stop_after_attempt, retry_if_exception_type
 )
+from datetime import datetime
 
 # Load variables from the .env file into the system environment
 load_dotenv()
@@ -33,6 +34,7 @@ def call_gemini(prompt_idea):
 
                 Output should be in JSON format with this structure:
                 {{
+                "timestamp": "{datetime.now().strftime("%Y%m%d_%H%M%S")}"
                 "concept": "..."
                 "prompts": ["...","...","...",...]
                 }}
