@@ -4,4 +4,4 @@ def saveJSON(text):
     jsonObj = json.loads(cleanText)
     timestamp = jsonObj["timestamp"]
     with open(f"prompt-expander-{timestamp}.json", "w") as f:
-        f.write(text)
+        f.write(cleanText)

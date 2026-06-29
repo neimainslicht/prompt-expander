@@ -1,1 +1,15 @@
+#Environment variables
 .env
+
+#Generated outputs and inputs
+output/*
+!output/.gitkeep
+input/*
+!input/.gitkeep
+
+#Python cache
+__pycache__/
+*.pyc
+
+#Virtual environment
+.venv/
