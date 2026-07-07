@@ -51,7 +51,19 @@ def call_gemini(prompt_idea):
     {{
     "timestamp": "{datetime.now().strftime("%Y%m%d_%H%M%S")}",
     "concept": "...",
-    "prompts": ["...","...","...",...]
+    "prompts": [
+    {{
+      "id": 1,
+      "text": "...",
+      "status": "not generated"
+    }},
+    {{
+      "id": 2,
+      "text": "...",
+      "status": "not generated"
+    }}
+    ...
+    ]
     }}
 
     Concept: {prompt_idea}
