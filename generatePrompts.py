@@ -49,18 +49,12 @@ def call_gemini(prompt_idea):
 
     Output should be in JSON format with this structure:
     {{
-    "timestamp": "{datetime.now().strftime("%Y%m%d_%H%M%S")}",
-    "concept": "...",
     "prompts": [
     {{
-      "id": 1,
       "text": "...",
-      "status": "not generated"
     }},
     {{
-      "id": 2,
       "text": "...",
-      "status": "not generated"
     }}
     ...
     ]

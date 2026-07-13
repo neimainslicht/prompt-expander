@@ -5,7 +5,7 @@ import os
 import questionary
 import time
 
-def process_batch_mode():
+def process_batch_mode(prompt_idea):
     print("\n--- Batch Mode Activation ---")
     
     # 1. Ask for the file path with a built-in default option
@@ -41,7 +41,8 @@ def process_batch_mode():
                 response = generatePrompts.generatePrompt(clean_line)
                 print(response)
                 if response:
-                    fileUtils.saveJSON(response)
+                    parsed = fileUtils.parseJSON(response, prompt_idea)
+                    fileUtils.saveJSON(parsed)
 
                 # Sleep for 1.5 seconds in between API calls
                 time.sleep(1.5)
@@ -81,10 +82,11 @@ def main_menu():
             response = generatePrompts.generatePrompt(prompt_idea)
             print(response)
             if response:
-                fileUtils.saveJSON(response)
+                parsed = fileUtils.parseJSON(response, prompt_idea)
+                fileUtils.saveJSON(parsed)
             
         elif choice == "Batch Mode":
-            process_batch_mode()
+            process_batch_mode(prompt_idea)
             
         elif choice == "Exit" or choice is None: # None handles Ctrl+C gracefully
             print("\nGoodbye!")
