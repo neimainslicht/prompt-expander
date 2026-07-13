@@ -71,6 +71,7 @@ def main_menu():
             choices=[
                 "Single Idea",
                 "Batch Mode",
+                "Generate Images From Prompts",
                 "Exit"
             ]
         ).ask()
@@ -87,6 +88,22 @@ def main_menu():
             
         elif choice == "Batch Mode":
             process_batch_mode(prompt_idea)
+        
+        elif choice == "Generate Images From Prompts":
+
+            output_files = fileUtils.getOutputFiles()
+            # Create the numbered list entries
+            lines = [f"{i}. {name}" for i, name in enumerate(output_files, start=1)]
+            lines = "\n".join(lines)
+
+            prompt_file_num = input(f"""Available prompt files:\n\n{lines}\n\nChoose:""").strip()
+            if prompt_file_num.isdigit():
+                prompt_file_num = int(prompt_file_num)
+                if prompt_file_num >= 1 and prompt_file_num <= len(lines):
+                    prompt_file_path = f"output/{output_files[prompt_file_num-1]}"
+                    fileUtils.printPromptsFromJSON(prompt_file_path)
+                
+
             
         elif choice == "Exit" or choice is None: # None handles Ctrl+C gracefully
             print("\nGoodbye!")

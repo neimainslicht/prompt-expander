@@ -1,6 +1,7 @@
 import json
 import re
 from datetime import datetime
+from pathlib import Path
 
 def parseJSON(api_response, prompt_idea):
     data = json.loads(api_response)
@@ -28,4 +29,15 @@ def saveJSON(jsonObj):
 
     with open(filename, "w", encoding="utf-8") as f:
         json.dump(jsonObj, f, indent=2, ensure_ascii=False)
+def getOutputFiles():
+    folder_path = Path('output')
+
+    # .name extracts just the filename string from the path object
+    files = [f.name for f in folder_path.glob('*.json')]
+    return files
+def printPromptsFromJSON(path):
+    with open(path, "r") as file:
+        content = file.read()  
+    print(content) 
+
 
