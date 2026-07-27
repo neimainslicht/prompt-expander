@@ -35,9 +35,20 @@ def getOutputFiles():
     # .name extracts just the filename string from the path object
     files = [f.name for f in folder_path.glob('*.json')]
     return files
-def printPromptsFromJSON(path):
-    with open(path, "r") as file:
-        content = file.read()  
-    print(content) 
+def getJSONObject(path):
+    try:
+        with open(path, 'r', encoding='utf-8', errors='ignore') as file:
+            jsonObj = json.load(file)
+            return jsonObj
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        print(f"Error: {e}")
+def getPromptListFromJSON(jsonObj):
+    prompts = jsonObj["prompts"]
+    prompt_list = f""
+    for prompt in prompts:
+        line = f"{prompt["id"]}. {prompt["text"]}\n"
+        prompt_list += line
+    return prompt_list
+    
 
 
