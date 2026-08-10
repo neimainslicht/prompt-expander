@@ -42,13 +42,8 @@ def getJSONObject(path):
             return jsonObj
     except (FileNotFoundError, json.JSONDecodeError) as e:
         print(f"Error: {e}")
-def getPromptListFromJSON(jsonObj):
-    prompts = jsonObj["prompts"]
-    prompt_list = f""
-    for prompt in prompts:
-        line = f"{prompt["id"]}. {prompt["text"]}\n"
-        prompt_list += line
-    return prompt_list
+def createImageFileName(concept, prompt_id)
+
     
 
 

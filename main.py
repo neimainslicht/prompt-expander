@@ -1,4 +1,5 @@
 import generatePrompts
+import generateImage
 import fileUtils
 import sys
 import os
@@ -60,20 +61,30 @@ def process_batch_mode(prompt_idea):
     input("\nPress Enter to return to main menu...")
 
 def process_image_generation():
+    # user selects a file 
     output_files = fileUtils.getOutputFiles()
-    
-    # Create the numbered list entries
-    lines = [f"{i}. {name}" for i, name in enumerate(output_files, start=1)]
-    lines = "\n".join(lines)
-    
-    prompt_file_num = input(f"""Available prompt files:\n\n{lines}\n\nChoose:""").strip()
-    if prompt_file_num.isdigit():
-        prompt_file_num = int(prompt_file_num)
-        if prompt_file_num >= 1 and prompt_file_num <= len(lines):
-            prompt_file_path = f"output/{output_files[prompt_file_num-1]}"
-            prompt_json_obj = fileUtils.getJSONObject(prompt_file_path)
-            prompt_list = fileUtils.getPromptListFromJSON(prompt_json_obj)
-            chosen_prompts = input(f"""Available prompts:\n\n{prompt_list}\n\nGenerate images from which prompts? """).strip()
+    prompt_file = questionary.select(
+        "Choose a File:",
+        choices=output_files
+    ).ask()
+    prompt_file_path = f"output/{prompt_file}"
+    prompt_json_obj = fileUtils.getJSONObject(prompt_file_path)
+
+    # user selects one or more prompts to generate images from
+    choices_list = [questionary.Choice(title=item["text"], value=item) for item in prompt_json_obj["prompts"]]
+    chosen_prompts = questionary.checkbox(
+        "Generate images from which prompts?",
+        choices= choices_list
+
+    ).ask()
+
+    for prompt in chosen_prompts:
+        print(f"\nGenerating image for prompt {prompt["id"]}...")
+        prompt_txt = prompt["text"]
+        image = generateImage.generate_image(prompt_txt)
+    input("\nPress Enter to return to main menu...")
+
+
             
 
 
