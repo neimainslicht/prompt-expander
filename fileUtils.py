@@ -1,4 +1,5 @@
 import json
+import os
 import re
 from datetime import datetime
 from pathlib import Path
@@ -25,6 +26,9 @@ def saveJSON(jsonObj):
     concept = jsonObj["concept"].strip().lower()
     concept = re.sub(r'[^a-zA-Z0-9\s]', "", concept)
     concept = re.sub(r'[\s]', "-", concept)
+
+    os.makedirs("output", exist_ok=True)
+
     filename = f"output/{concept}_{timestamp}.json"
 
     with open(filename, "w", encoding="utf-8") as f:
@@ -42,7 +46,23 @@ def getJSONObject(path):
             return jsonObj
     except (FileNotFoundError, json.JSONDecodeError) as e:
         print(f"Error: {e}")
-def createImageFileName(concept, prompt_id)
+def saveImage(image, concept, prompt_id):
+    if image:
+        concept = concept.strip().lower()
+        concept = re.sub(r'[^a-zA-Z0-9\s]', "", concept)
+        concept = re.sub(r'[\s]', "-", concept)
+
+        generation_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        os.makedirs("output/images", exist_ok=True)
+        filename = f"output/images/{concept}-prompt-{prompt_id}-{generation_timestamp}.png"
+
+        image.save(filename, format="PNG")
+        return True
+    else:
+        print(f"\nImage generation failed for prompt {prompt_id}.")
+        return False
+
 
     
 

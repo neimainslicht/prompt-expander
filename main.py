@@ -80,8 +80,10 @@ def process_image_generation():
 
     for prompt in chosen_prompts:
         print(f"\nGenerating image for prompt {prompt["id"]}...")
-        prompt_txt = prompt["text"]
-        image = generateImage.generate_image(prompt_txt)
+        image = generateImage.generate_image(prompt["text"])
+        print(f"\nAttempting to save image for prompt {prompt["id"]}...")
+        fileUtils.saveImage(image, prompt_json_obj["concept"], prompt["id"])
+
     input("\nPress Enter to return to main menu...")
 
 
