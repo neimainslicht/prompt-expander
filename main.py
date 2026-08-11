@@ -81,8 +81,16 @@ def process_image_generation():
     for prompt in chosen_prompts:
         print(f"\nGenerating image for prompt {prompt["id"]}...")
         image = generateImage.generate_image(prompt["text"])
-        print(f"\nAttempting to save image for prompt {prompt["id"]}...")
-        fileUtils.saveImage(image, prompt_json_obj["concept"], prompt["id"])
+        if image:
+            print(f"\nSaving image for prompt {prompt["id"]}...")
+            fileUtils.saveImage(image, prompt_json_obj["concept"], prompt["id"])
+            fileUtils.updatePromptStatus(prompt_json_obj, prompt["id"], "generated")
+        else:
+            print(f"\nFailed to generate image for prompt {prompt["id"]}.")
+            fileUtils.updatePromptStatus(prompt_json_obj, prompt["id"], "failed")
+    fileUtils.saveJSON(prompt_json_obj)
+
+            
 
     input("\nPress Enter to return to main menu...")
 

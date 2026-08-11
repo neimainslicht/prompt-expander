@@ -21,18 +21,27 @@ def parseJSON(api_response, prompt_idea):
     return output
 
 def saveJSON(jsonObj):
-    timestamp = jsonObj["timestamp"].replace('T','_').replace(':','-')
+    timestamp = jsonObj["timestamp"].replace('T', '_').replace(':', '-')
 
     concept = jsonObj["concept"].strip().lower()
     concept = re.sub(r'[^a-zA-Z0-9\s]', "", concept)
-    concept = re.sub(r'[\s]', "-", concept)
+    concept = re.sub(r'\s+', "-", concept)
 
     os.makedirs("output", exist_ok=True)
 
     filename = f"output/{concept}_{timestamp}.json"
 
+
     with open(filename, "w", encoding="utf-8") as f:
         json.dump(jsonObj, f, indent=2, ensure_ascii=False)
+
+def updatePromptStatus(jsonObj, prompt_id, status):
+    prompts = jsonObj["prompts"]
+    for prompt in prompts:
+        if prompt["id"] == prompt_id:
+            prompt["status"] = status
+            return
+
 def getOutputFiles():
     folder_path = Path('output')
 
