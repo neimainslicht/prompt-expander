@@ -63,12 +63,20 @@ def process_batch_mode(prompt_idea):
 def process_image_generation():
     # user selects a file 
     output_files = fileUtils.getOutputFiles()
+    if not output_files:
+        input("\nNo prompt files found. Press Enter to return to main menu...")
+        return
     prompt_file = questionary.select(
         "Choose a File:",
         choices=output_files
     ).ask()
+    if prompt_file is None:
+        return
     prompt_file_path = f"output/{prompt_file}"
     prompt_json_obj = fileUtils.getJSONObject(prompt_file_path)
+    if prompt_json_obj is None:
+        input("\nCould not read that file. Press Enter to return to main menu...")
+        return
 
     # user selects one or more prompts to generate images from
     choices_list = [questionary.Choice(title=item["text"], value=item) for item in prompt_json_obj["prompts"]]
@@ -78,17 +86,34 @@ def process_image_generation():
 
     ).ask()
 
-    for prompt in chosen_prompts:
-        print(f"\nGenerating image for prompt {prompt["id"]}...")
-        image = generateImage.generate_image(prompt["text"])
-        if image:
-            print(f"\nSaving image for prompt {prompt["id"]}...")
-            fileUtils.saveImage(image, prompt_json_obj["concept"], prompt["id"])
-            fileUtils.updatePromptStatus(prompt_json_obj, prompt["id"], "generated")
-        else:
-            print(f"\nFailed to generate image for prompt {prompt["id"]}.")
-            fileUtils.updatePromptStatus(prompt_json_obj, prompt["id"], "failed")
-    fileUtils.saveJSON(prompt_json_obj)
+    try:
+        for prompt in chosen_prompts or []:
+            # one prompt failing (generation or saving) must not stop the rest of the batch
+            # a rerun that fails shouldn't downgrade a prompt whose image already exists
+            already_generated = any(
+                p["id"] == prompt["id"] and p.get("status") == "generated"
+                for p in prompt_json_obj["prompts"]
+            )
+            failed_status = "generated" if already_generated else "failed"
+            try:
+                print(f"\nGenerating image for prompt {prompt["id"]}...")
+                image = generateImage.generate_image(prompt["text"])
+                if image:
+                    print(f"\nSaving image for prompt {prompt["id"]}...")
+                    fileUtils.saveImage(image, prompt_json_obj["concept"], prompt["id"])
+                    fileUtils.updatePromptStatus(prompt_json_obj, prompt["id"], "generated")
+                else:
+                    print(f"\nFailed to generate image for prompt {prompt["id"]}.")
+                    fileUtils.updatePromptStatus(prompt_json_obj, prompt["id"], failed_status)
+            except Exception as e:
+                print(f"\nUnexpected error on prompt {prompt["id"]}: {e}")
+                try:
+                    fileUtils.updatePromptStatus(prompt_json_obj, prompt["id"], failed_status)
+                except Exception:
+                    pass
+    finally:
+        # persist statuses even if the batch is interrupted (e.g. Ctrl+C)
+        fileUtils.saveJSON(prompt_json_obj)
 
             
 
