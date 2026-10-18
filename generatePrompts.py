@@ -10,9 +10,18 @@ from datetime import datetime
 # Load variables from the .env file into the system environment
 load_dotenv()
 
-# Access the API Key
-api_key = os.getenv("API_KEY")
-client = genai.Client(api_key=api_key)
+_client = None
+
+
+def get_client():
+    """Create the Gemini client on first use so importing this module never needs API_KEY."""
+    global _client
+    if _client is None:
+        api_key = os.getenv("API_KEY")
+        if not api_key:
+            raise RuntimeError("API_KEY is not set.")
+        _client = genai.Client(api_key=api_key)
+    return _client
 
 def should_retry_gemini(e: Exception) -> bool:
     if not isinstance(e, APIError):
@@ -63,28 +72,30 @@ def call_gemini(prompt_idea):
     Concept: {prompt_idea}
     """
 
-    response = client.models.generate_content(
+    response = get_client().models.generate_content(
         model="gemini-2.5-flash",
         contents=prompt, 
         config={"response_mime_type": "application/json"} 
     )
     return response
 
-def generatePrompt(prompt_idea):
+def generate_prompt_text(prompt_idea):
+    """Return (json_text, error_message). Exactly one of the two is None."""
     if not prompt_idea or prompt_idea.isspace():
-        print("Empty prompt entered.")
-        return None
+        return None, "Empty prompt entered."
     try:
         response = call_gemini(prompt_idea=prompt_idea)
-        return response.text
-
+        return response.text, None
     except APIError as e:
         if e.code == 429 and "per day" in str(e).lower():
-            print("Daily API quota exceeded. Please wait until tomorrow or upgrade your plan.")
-
-        else:
-            print(f"Gemini API failed with status {e.code}: {e}")
-        return None
+            return None, "Daily API quota exceeded. Please wait until tomorrow or upgrade your plan."
+        return None, f"Gemini API failed with status {e.code}: {e}"
     except Exception as e:
-        print(f"Failed to generate prompts due to an unexpected error: {e}")
-        return None
+        return None, f"Failed to generate prompts due to an unexpected error: {e}"
+
+
+def generatePrompt(prompt_idea):
+    text, error = generate_prompt_text(prompt_idea)
+    if error:
+        print(error)
+    return text

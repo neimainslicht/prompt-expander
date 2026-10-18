@@ -131,12 +131,19 @@ def call_image_api(provider: ImageProvider, prompt):
     return retrying(provider.generate, prompt)
 
 
-def generate_image(prompt, provider=None):
+def generate_image_with_error(prompt, provider=None):
+    """Return (image, error_message). Exactly one of the two is None."""
     try:
         if not isinstance(provider, ImageProvider):
             provider = get_provider(provider)
-        return call_image_api(provider, prompt)
+        return call_image_api(provider, prompt), None
     except Exception as e:
         message = provider.describe_error(e) if isinstance(provider, ImageProvider) else str(e)
-        print(f"Failed to generate image: {message}")
-        return None
+        return None, message
+
+
+def generate_image(prompt, provider=None):
+    image, error = generate_image_with_error(prompt, provider)
+    if error:
+        print(f"Failed to generate image: {error}")
+    return image

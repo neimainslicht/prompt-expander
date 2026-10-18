@@ -1,68 +1,70 @@
-import generatePrompts
-import generateImage
-import fileUtils
-import sys
 import os
-import questionary
-import time
+import sys
 
-def process_batch_mode(prompt_idea):
+import questionary
+
+import services
+
+
+def show_expand_result(result):
+    if result.ok:
+        for prompt in result.data["prompts"]:
+            print(f"  {prompt['id']}. {prompt['text']}")
+        print(f"[✓] Saved to {result.prompt_file}")
+    else:
+        print(f"[Error] {result.error}")
+
+
+def process_single_idea():
+    prompt_idea = input("Enter a short idea for an image, and the Prompt Expander will transform it into multiple detailed text to image prompts.")
+    show_expand_result(services.expand_idea(prompt_idea))
+    input("\nPress Enter to return to main menu...")
+
+
+def process_batch_mode():
     print("\n--- Batch Mode Activation ---")
-    
-    # 1. Ask for the file path with a built-in default option
+
     file_path = questionary.text(
         "Enter path to .txt file:",
         default="input/batch.txt"
     ).ask()
-    
+
     # Handle Ctrl+C cancel during the text prompt gracefully
     if file_path is None:
         print("\nBatch mode canceled.")
         input("\nPress Enter to return to main menu...")
         return
 
-    # 2. Check if the file actually exists before loading
     if not os.path.exists(file_path):
         print(f"\n[Error] File not found at: {file_path}")
         input("\nPress Enter to return to main menu...")
         return
 
-    # 3. Load file and Process each line
     print("\n[!] Loading file...")
     print("working on it...\n")
-    
-    try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            for line_num, line in enumerate(f, 1):
-                clean_line = line.strip()
-                if not clean_line: 
-                    continue # Skip empty lines
-                
-                print(f"-> Processing line {line_num}: '{clean_line}'")
-                response = generatePrompts.generatePrompt(clean_line)
-                print(response)
-                if response:
-                    parsed = fileUtils.parseJSON(response, prompt_idea)
-                    fileUtils.saveJSON(parsed)
 
-                # Sleep for 1.5 seconds in between API calls
-                time.sleep(1.5)
-                
+    try:
+        ideas = services.read_ideas_file(file_path)
     except Exception as e:
         print(f"[Error] Failed to read file: {e}")
         input("\nPress Enter to return to main menu...")
         return
 
-    
-            
-    print("[✓] Processing complete and saved successfully!")
-    
-    # 5. Return to menu
+    def report(idea, result):
+        if result is None:
+            print(f"-> Processing: '{idea}'")
+        else:
+            show_expand_result(result)
+
+    results = services.expand_ideas(ideas, on_progress=report)
+
+    failed = sum(1 for r in results if not r.ok)
+    print(f"[✓] Processing complete: {len(results) - failed} saved, {failed} failed.")
     input("\nPress Enter to return to main menu...")
 
+
 def process_image_generation():
-    # user selects a file 
-    output_files = fileUtils.getOutputFiles()
+    output_files = services.list_prompt_files()
     if not output_files:
         input("\nNo prompt files found. Press Enter to return to main menu...")
         return
@@ -72,63 +74,36 @@ def process_image_generation():
     ).ask()
     if prompt_file is None:
         return
-    prompt_file_path = f"output/{prompt_file}"
-    prompt_json_obj = fileUtils.getJSONObject(prompt_file_path)
-    if prompt_json_obj is None:
+    prompt_data = services.load_prompt_file(prompt_file)
+    if prompt_data is None:
         input("\nCould not read that file. Press Enter to return to main menu...")
         return
 
     # user selects one or more prompts to generate images from
-    choices_list = [questionary.Choice(title=item["text"], value=item) for item in prompt_json_obj["prompts"]]
-    chosen_prompts = questionary.checkbox(
+    choices_list = [questionary.Choice(title=item["text"], value=item["id"]) for item in prompt_data["prompts"]]
+    chosen_ids = questionary.checkbox(
         "Generate images from which prompts?",
-        choices= choices_list
-
+        choices=choices_list
     ).ask()
 
-    try:
-        for prompt in chosen_prompts or []:
-            # one prompt failing (generation or saving) must not stop the rest of the batch
-            # a rerun that fails shouldn't downgrade a prompt whose image already exists
-            already_generated = any(
-                p["id"] == prompt["id"] and p.get("status") == "generated"
-                for p in prompt_json_obj["prompts"]
-            )
-            failed_status = "generated" if already_generated else "failed"
-            try:
-                print(f"\nGenerating image for prompt {prompt["id"]}...")
-                image = generateImage.generate_image(prompt["text"])
-                if image:
-                    print(f"\nSaving image for prompt {prompt["id"]}...")
-                    fileUtils.saveImage(image, prompt_json_obj["concept"], prompt["id"])
-                    fileUtils.updatePromptStatus(prompt_json_obj, prompt["id"], "generated")
-                else:
-                    print(f"\nFailed to generate image for prompt {prompt["id"]}.")
-                    fileUtils.updatePromptStatus(prompt_json_obj, prompt["id"], failed_status)
-            except Exception as e:
-                print(f"\nUnexpected error on prompt {prompt["id"]}: {e}")
-                try:
-                    fileUtils.updatePromptStatus(prompt_json_obj, prompt["id"], failed_status)
-                except Exception:
-                    pass
-    finally:
-        # persist statuses even if the batch is interrupted (e.g. Ctrl+C)
-        fileUtils.saveJSON(prompt_json_obj)
+    def report(prompt_id, result):
+        if result is None:
+            print(f"\nGenerating image for prompt {prompt_id}...")
+        elif result.ok:
+            print(f"Saved image for prompt {prompt_id}: {result.image_path}")
+        else:
+            print(f"\nFailed to generate image for prompt {prompt_id}: {result.error}")
 
-            
+    services.generate_images(prompt_data, chosen_ids or [], on_progress=report)
 
     input("\nPress Enter to return to main menu...")
-
-
-            
-
 
 
 def main_menu():
     while True:
         # Clear the terminal
-        print("\033[H\033[J", end="") 
-        
+        print("\033[H\033[J", end="")
+
         # Create the interactive selection menu
         choice = questionary.select(
             "What would you like to do?",
@@ -140,32 +115,19 @@ def main_menu():
             ]
         ).ask()
 
-        # Handle the chosen selection
         if choice == "Single Idea":
-            prompt_idea = input("Enter a short idea for an image, and the Prompt Expander will transform it into multiple detailed text to image prompts.")
+            process_single_idea()
 
-            response = generatePrompts.generatePrompt(prompt_idea)
-            print(response)
-            if response:
-                parsed = fileUtils.parseJSON(response, prompt_idea)
-                fileUtils.saveJSON(parsed)
-            
         elif choice == "Batch Mode":
-            process_batch_mode(prompt_idea)
-        
+            process_batch_mode()
+
         elif choice == "Generate Images From Prompts":
             process_image_generation()
-            
-        elif choice == "Exit" or choice is None: # None handles Ctrl+C gracefully
+
+        elif choice == "Exit" or choice is None:  # None handles Ctrl+C gracefully
             print("\nGoodbye!")
             sys.exit()
 
 
 if __name__ == "__main__":
     main_menu()
-
-
-
-
-
-

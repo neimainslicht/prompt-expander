@@ -11,6 +11,12 @@ A Python application that transforms short, simple prompts into detailed, high-q
 - Option to select prompts and generate images from them
 - Command-line interface for quick usage
 
+## Architecture
+
+- `main.py` is the command-line interface only: it asks questions, calls `services`, and prints results.
+- `services.py` holds the workflows (expand ideas, list/load prompt files, generate images). It takes plain inputs, returns result objects, and never prompts, prints, or reads API keys. A future web backend should import this module.
+- `generatePrompts.py` (Gemini) and `generateImage.py` (image providers) are the only modules that read `API_KEY` / `HF_TOKEN` from `.env`. Keys and provider-specific code stay on the backend and must never be sent to a browser.
+
 ## Examples
 
 ### Text to Prompts:

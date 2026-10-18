@@ -34,6 +34,7 @@ def saveJSON(jsonObj):
 
     with open(filename, "w", encoding="utf-8") as f:
         json.dump(jsonObj, f, indent=2, ensure_ascii=False)
+    return filename
 
 def updatePromptStatus(jsonObj, prompt_id, status):
     prompts = jsonObj["prompts"]
@@ -53,8 +54,8 @@ def getJSONObject(path):
         with open(path, 'r', encoding='utf-8', errors='ignore') as file:
             jsonObj = json.load(file)
             return jsonObj
-    except (FileNotFoundError, json.JSONDecodeError) as e:
-        print(f"Error: {e}")
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
 def saveImage(image, concept, prompt_id):
     if image:
         concept = concept.strip().lower()
@@ -73,10 +74,8 @@ def saveImage(image, concept, prompt_id):
             suffix += 1
 
         image.save(filename, format="PNG")
-        return True
-    else:
-        print(f"\nImage generation failed for prompt {prompt_id}.")
-        return False
+        return filename
+    return None
 
 
     
