@@ -1,4 +1,5 @@
 import sys, json, types, os, glob
+from unittest import mock
 from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -6,9 +7,7 @@ import pytest, questionary
 from PIL import Image
 import fileUtils, generateImage
 
-_src = (ROOT / "main.py").read_text(encoding="utf-8").rstrip()
-main = types.ModuleType("main")
-exec(_src[: -len("main_menu()")], main.__dict__)
+import main
 
 class Q:
     def __init__(s, v): s.v = v
@@ -115,10 +114,16 @@ def test_rerun_failed_then_success(monkeypatch, env):
     assert statuses(d2) == {1: "generated", 2: "generated", 3: "generated"}
     assert len(images()) == 3
 
-def test_rerun_generated_success_keeps_an_image(monkeypatch, env):
-    run(monkeypatch, env, FakeProvider(), [env.obj["prompts"][0]])
-    run(monkeypatch, env, FakeProvider(), [env.obj["prompts"][0]])
-    assert len(images()) >= 1
+def test_rerun_generated_success_keeps_both_images(monkeypatch, env):
+    # freeze the clock so both runs land in the same second (same timestamp)
+    with mock.patch("fileUtils.datetime") as dt:
+        dt.now.return_value.strftime.return_value = "20260101_000000"
+        run(monkeypatch, env, FakeProvider(), [env.obj["prompts"][0]])
+        d = run(monkeypatch, env, FakeProvider(), [env.obj["prompts"][0]])
+        run(monkeypatch, env, FakeProvider(), [env.obj["prompts"][0]])
+    names = sorted(os.path.basename(f) for f in images())
+    assert len(names) == 3 and len(set(names)) == 3
+    assert statuses(d)[1] == "generated"
 
 def test_rerun_generated_then_api_fails_keeps_status(monkeypatch, env):
     run(monkeypatch, env, FakeProvider(), [env.obj["prompts"][0]])

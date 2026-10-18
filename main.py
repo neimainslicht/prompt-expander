@@ -159,7 +159,10 @@ def main_menu():
         elif choice == "Exit" or choice is None: # None handles Ctrl+C gracefully
             print("\nGoodbye!")
             sys.exit()
-main_menu()
+
+
+if __name__ == "__main__":
+    main_menu()
 
 
 

@@ -64,7 +64,13 @@ def saveImage(image, concept, prompt_id):
         generation_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
         os.makedirs("output/images", exist_ok=True)
-        filename = f"output/images/{concept}-prompt-{prompt_id}-{generation_timestamp}.png"
+        base = f"output/images/{concept}-prompt-{prompt_id}-{generation_timestamp}"
+        filename = f"{base}.png"
+        # the timestamp only has 1s resolution, so never overwrite an earlier image from a quick rerun
+        suffix = 2
+        while os.path.exists(filename):
+            filename = f"{base}-{suffix}.png"
+            suffix += 1
 
         image.save(filename, format="PNG")
         return True
