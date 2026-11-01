@@ -46,7 +46,18 @@ All settings live in `config.py` and are read from environment variables, with `
 
 Gemini (free tier) and Hugging Face (prepaid credits) are configured separately: Gemini is limited by request counts and is not treated as spending, while Hugging Face has a dollar budget. The app's figures are its own estimates and will not exactly match your provider balance; the provider's dashboard is the source of truth.
 
-**Status:** this stage only defines and validates the settings. The limits are enforced in later stages (validation, usage tracking, quotas and budgets), so the values above do not yet restrict generation.
+**Status:** request-size limits and the generation switch are enforced (see below). Usage tracking, per-minute and daily limits, and budgets are not enforced yet, so `MAX_GENERATION_REQUESTS_PER_MINUTE`, `MAX_IMAGES_PER_DAY`, the Gemini caps and the Hugging Face budget are defined but do not restrict anything yet.
+
+**Hugging Face budget:** `HF_MONTHLY_BUDGET_USD` is the full amount you want to track, not a per-month allowance (the name will be changed when budgets are enforced). The 10% margin is applied once, in `Settings.hf_usable_budget_usd`. When budgets are enforced, spending is counted cumulatively across all months against that ceiling, so it does not reset monthly. If you add credits, raise the setting yourself.
+
+### Request limits and the generation switch
+Checks live in `validation.py` and run before any provider is called. Over-long or oversized input is rejected with a message, never truncated.
+
+- Empty or whitespace-only ideas, ideas over `MAX_CONCEPT_LENGTH` (measured without surrounding whitespace), and requests for more than `MAX_PROMPTS_PER_REQUEST` prompts are refused. Gemini is asked for exactly the configured number of prompts, and extra prompts it returns are dropped.
+- Choosing more than `MAX_IMAGES_PER_REQUEST` images, or any chosen image prompt that is empty or over `MAX_IMAGE_PROMPT_LENGTH`, refuses the whole request, so nothing is generated. In the menu, the prompt picker shows the limit and won't accept too many.
+- `GENERATION_ENABLED=false` stops all new Gemini and image calls and shows "Generation is temporarily unavailable". Listing and loading existing prompt files still works. The setting is read each time a request is authorized (and again at the lowest level, before each provider call), but it is loaded once per run, so restart the app after changing it. It does not cancel a batch already running.
+- Refusals are `errors.AppError` subclasses with a `code`, `message` and `http_status` (422 for validation, 503 when disabled), so a future web layer can turn them into HTTP responses. A single idea or image that fails comes back as a result with `error_code`; request-wide refusals from `generate_images` and `expand_ideas` are raised.
+- File names are shortened to 80 characters of the idea; the full idea is kept inside the saved JSON.
 
 ### Credential safety
 Keys are read only through `config.require_secret()` right before a provider is used. Error messages and logs go through `logging_config.redact()`, which removes the configured keys and key-shaped strings (Bearer tokens, `hf_...`, `AIza...`, `Authorization:`/`api_key=` values). Logging records exception tracebacks unredacted, so don't log exceptions with `exc_info`.

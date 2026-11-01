@@ -1,4 +1,6 @@
 import config
+import validation
+from errors import AppError
 from logging_config import redact
 from google import genai
 from google.genai.errors import APIError
@@ -39,9 +41,10 @@ def should_retry_gemini(e: Exception) -> bool:
     reraise=True
 )
 
-def call_gemini(prompt_idea):
+def call_gemini(prompt_idea, num_prompts=None):
+    num_prompts = num_prompts or config.get_settings().max_prompts_per_request
     prompt = f"""
-    Given the following concept, create 10 detailed image generation prompts. Each prompt should include some combination of:
+    Given the following concept, create {num_prompts} detailed image generation prompts. Each prompt should include some combination of:
 
     subject
     composition
@@ -73,12 +76,19 @@ def call_gemini(prompt_idea):
     )
     return response
 
-def generate_prompt_text(prompt_idea):
-    """Return (json_text, error_message). Exactly one of the two is None."""
-    if not prompt_idea or prompt_idea.isspace():
-        return None, "Empty prompt entered."
+def generate_prompt_text(prompt_idea, num_prompts=None):
+    """Return (json_text, error_message). Exactly one of the two is None.
+
+    The request is validated first, so nothing invalid or disabled reaches Gemini.
+    """
     try:
-        response = call_gemini(prompt_idea=prompt_idea)
+        validation.ensure_generation_enabled()
+        validation.validate_concept(prompt_idea)
+        num_prompts = validation.validate_prompt_count(num_prompts)
+    except (AppError, config.ConfigError) as e:
+        return None, getattr(e, "message", None) or str(e)
+    try:
+        response = call_gemini(prompt_idea=prompt_idea, num_prompts=num_prompts)
         return response.text, None
     except APIError as e:
         if e.code == 429 and "per day" in str(e).lower():

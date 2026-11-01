@@ -8,6 +8,7 @@ from huggingface_hub.errors import HfHubHTTPError
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import config
 import generateImage
 import generatePrompts
 
@@ -59,3 +60,23 @@ def block_real_api_calls(monkeypatch):
 def no_wait(monkeypatch):
     """Skip real backoff sleeps in every test."""
     monkeypatch.setattr(generateImage, "_wait_strategy", lambda provider: tenacity.wait_none())
+
+
+@pytest.fixture(autouse=True)
+def default_settings(monkeypatch):
+    """Run every test with the documented default limits, whatever the developer's .env says."""
+    for name, value in config.DEFAULTS.items():
+        monkeypatch.setenv(name, value)
+    config.get_settings.cache_clear()
+    yield
+    config.get_settings.cache_clear()
+
+
+@pytest.fixture
+def settings(monkeypatch):
+    """Override settings inside a test: settings(MAX_IMAGES_PER_REQUEST="3")."""
+    def apply(**overrides):
+        for name, value in overrides.items():
+            monkeypatch.setenv(name, str(value))
+        config.get_settings.cache_clear()
+    return apply

@@ -4,6 +4,9 @@ import re
 from datetime import datetime
 from pathlib import Path
 
+MAX_FILENAME_SLUG = 80  # keeps file names under OS limits; the full concept stays inside the JSON
+
+
 def parseJSON(api_response, prompt_idea):
     data = json.loads(api_response)
     output = {
@@ -25,7 +28,7 @@ def saveJSON(jsonObj):
 
     concept = jsonObj["concept"].strip().lower()
     concept = re.sub(r'[^a-zA-Z0-9\s]', "", concept)
-    concept = re.sub(r'\s+', "-", concept)
+    concept = re.sub(r'\s+', "-", concept)[:MAX_FILENAME_SLUG]
 
     os.makedirs("output", exist_ok=True)
 
@@ -60,7 +63,7 @@ def saveImage(image, concept, prompt_id):
     if image:
         concept = concept.strip().lower()
         concept = re.sub(r'[^a-zA-Z0-9\s]', "", concept)
-        concept = re.sub(r'[\s]', "-", concept)
+        concept = re.sub(r'[\s]', "-", concept)[:MAX_FILENAME_SLUG]
 
         generation_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 

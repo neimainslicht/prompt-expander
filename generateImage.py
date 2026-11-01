@@ -7,6 +7,8 @@ from huggingface_hub.errors import InferenceTimeoutError
 from tenacity import Retrying, stop_after_attempt, retry_if_exception, wait_random_exponential
 
 import config
+import validation
+from errors import AppError
 from logging_config import redact
 
 MAX_ATTEMPTS = 5
@@ -130,6 +132,11 @@ def call_image_api(provider: ImageProvider, prompt):
 
 def generate_image_with_error(prompt, provider=None):
     """Return (image, error_message). Exactly one of the two is None."""
+    try:
+        validation.ensure_generation_enabled()
+        validation.validate_image_prompt(prompt)
+    except (AppError, config.ConfigError) as e:
+        return None, getattr(e, "message", None) or str(e)
     try:
         if not isinstance(provider, ImageProvider):
             provider = get_provider(provider)

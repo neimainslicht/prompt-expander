@@ -16,8 +16,11 @@ import logging_config
 from conftest import ScriptedProvider
 
 ROOT = Path(__file__).resolve().parent.parent
-FAKE_GEMINI = "AIzaSyFAKEFAKEFAKEFAKEFAKEFAKEFAKE12345"
-FAKE_HF = "hf_FAKEFAKEFAKEFAKE1234567890"
+# Fake credentials shaped like real ones so the redaction patterns are really exercised.
+# They are assembled from fragments so no complete key-shaped literal sits in the source
+# (GitHub secret scanning flags those, even when they are obviously fake).
+FAKE_GEMINI = "AI" + "za" + "Sy" + "FAKE" * 7 + "12345"
+FAKE_HF = "hf" + "_" + "FAKE" * 4 + "1234567890"
 
 
 # ---- defaults and parsing
@@ -122,6 +125,13 @@ def test_config_errors_never_contain_secret_values(monkeypatch):
 
 
 # ---- redaction
+def test_fake_credentials_still_look_like_real_ones():
+    """Guard: if the fakes stopped matching the key patterns, the redaction tests below would prove nothing."""
+    assert any(p.fullmatch(FAKE_GEMINI) for p in logging_config._PATTERNS)
+    assert any(p.fullmatch(FAKE_HF) for p in logging_config._PATTERNS)
+    assert FAKE_GEMINI.startswith("AIza") and FAKE_HF.startswith("hf_")
+
+
 @pytest.mark.parametrize("text", [
     f"key={FAKE_GEMINI}",
     f"Authorization: Bearer {FAKE_HF}",
@@ -183,7 +193,7 @@ def test_image_error_message_is_redacted(monkeypatch):
 def test_gemini_error_message_is_redacted(monkeypatch):
     monkeypatch.setenv("API_KEY", FAKE_GEMINI)
 
-    def boom(prompt_idea):
+    def boom(prompt_idea, num_prompts=None):
         raise RuntimeError(f"bad request x-goog-api-key: {FAKE_GEMINI}")
 
     monkeypatch.setattr(generatePrompts, "call_gemini", boom)

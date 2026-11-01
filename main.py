@@ -6,6 +6,7 @@ import questionary
 import config
 import logging_config
 import services
+from errors import AppError
 
 
 def show_expand_result(result):
@@ -58,7 +59,12 @@ def process_batch_mode():
         else:
             show_expand_result(result)
 
-    results = services.expand_ideas(ideas, on_progress=report)
+    try:
+        results = services.expand_ideas(ideas, on_progress=report)
+    except AppError as e:
+        print(f"[Error] {e.message}")
+        input("\nPress Enter to return to main menu...")
+        return
 
     failed = sum(1 for r in results if not r.ok)
     print(f"[✓] Processing complete: {len(results) - failed} saved, {failed} failed.")
@@ -66,6 +72,12 @@ def process_batch_mode():
 
 
 def process_image_generation():
+    try:
+        services.ensure_generation_enabled()
+    except AppError as e:
+        print(f"[Error] {e.message}")
+        input("\nPress Enter to return to main menu...")
+        return
     output_files = services.list_prompt_files()
     if not output_files:
         input("\nNo prompt files found. Press Enter to return to main menu...")
@@ -83,9 +95,17 @@ def process_image_generation():
 
     # user selects one or more prompts to generate images from
     choices_list = [questionary.Choice(title=item["text"], value=item["id"]) for item in prompt_data["prompts"]]
+    limit = services.max_images_per_request()
+
+    def within_limit(picked):
+        if len(picked) <= limit:
+            return True
+        return f"You selected {len(picked)} prompts, but the limit is {limit} images per request. Deselect some."
+
     chosen_ids = questionary.checkbox(
         "Generate images from which prompts?",
-        choices=choices_list
+        choices=choices_list,
+        validate=within_limit
     ).ask()
 
     def report(prompt_id, result):
@@ -96,7 +116,10 @@ def process_image_generation():
         else:
             print(f"\nFailed to generate image for prompt {prompt_id}: {result.error}")
 
-    services.generate_images(prompt_data, chosen_ids or [], on_progress=report)
+    try:
+        services.generate_images(prompt_data, chosen_ids or [], on_progress=report)
+    except AppError as e:
+        print(f"\n[Error] {e.message}")
 
     input("\nPress Enter to return to main menu...")
 

@@ -3,15 +3,23 @@
 The CLI (main.py) and any future web backend should call these functions and
 never talk to the API providers directly. Nothing here prompts, prints or reads
 API keys: keys and provider-specific code stay in generatePrompts.py and
-generateImage.py, and expected failures come back as results, not exceptions.
+generateImage.py.
+
+Failures of a single idea or image come back as results. A request that is refused
+as a whole (generation switched off, too many images, an over-long image prompt)
+raises an errors.AppError before any provider is called; it has a `code`,
+`message` and `http_status` a web layer can use.
 """
 import time
 from dataclasses import dataclass
 from typing import Callable, Optional
 
+import config
 import fileUtils
 import generateImage
 import generatePrompts
+import validation
+from errors import AppError
 
 
 @dataclass
@@ -21,6 +29,7 @@ class ExpandResult:
     prompt_file: Optional[str] = None  # path of the saved JSON
     data: Optional[dict] = None
     error: Optional[str] = None
+    error_code: Optional[str] = None  # set when the request was refused by validation
 
 
 @dataclass
@@ -30,15 +39,30 @@ class ImageResult:
     status: str  # status stored in the prompt file after this attempt
     image_path: Optional[str] = None
     error: Optional[str] = None
+    error_code: Optional[str] = None
 
 
-def expand_idea(idea) -> ExpandResult:
-    """Turn one idea into a saved file of detailed image prompts."""
-    text, error = generatePrompts.generate_prompt_text(idea)
+def expand_idea(idea, num_prompts=None) -> ExpandResult:
+    """Turn one idea into a saved file of detailed image prompts.
+
+    Invalid or refused requests return a failed result (with error_code) without
+    calling Gemini. num_prompts defaults to MAX_PROMPTS_PER_REQUEST.
+    """
+    try:
+        validation.ensure_generation_enabled()
+        validation.validate_concept(idea)
+        num_prompts = validation.validate_prompt_count(num_prompts)
+    except AppError as e:
+        return ExpandResult(idea=idea, ok=False, error=e.message, error_code=e.code)
+    except config.ConfigError as e:
+        return ExpandResult(idea=idea, ok=False, error=str(e), error_code="config_error")
+    text, error = generatePrompts.generate_prompt_text(idea, num_prompts)
     if error:
         return ExpandResult(idea=idea, ok=False, error=error)
     try:
         data = fileUtils.parseJSON(text, idea)
+        # the model may return more prompts than asked for; keep only what was requested
+        data["prompts"] = data["prompts"][:num_prompts]
         path = fileUtils.saveJSON(data)
     except Exception as e:
         return ExpandResult(idea=idea, ok=False, error=f"Could not process the model response: {e}")
@@ -49,7 +73,9 @@ def expand_ideas(ideas, delay=1.5, on_progress: Optional[Callable] = None) -> li
     """Expand each idea as its own concept. One failure never stops the rest.
 
     on_progress(idea, None) is called before each idea and on_progress(idea, result) after.
+    Raises GenerationDisabledError up front if generation is switched off.
     """
+    validation.ensure_generation_enabled()
     results = []
     for n, idea in enumerate(ideas):
         if n and delay:
@@ -72,6 +98,15 @@ def read_ideas_file(path) -> list:
     """Read ideas from a text file. Raises OSError if the file can't be read."""
     with open(path, "r", encoding="utf-8") as f:
         return parse_ideas(f.read())
+
+
+def ensure_generation_enabled():
+    """Raise GenerationDisabledError if generation is switched off (lets a UI check early)."""
+    validation.ensure_generation_enabled()
+
+
+def max_images_per_request() -> int:
+    return config.get_settings().max_images_per_request
 
 
 def list_prompt_files() -> list:
@@ -102,9 +137,18 @@ def generate_images(prompt_data, prompt_ids, provider=None, on_progress: Optiona
     rerun leaves a prompt that is already "generated" as "generated", since its
     earlier image still exists. The prompt file is saved even if interrupted.
     on_progress(prompt_id, None) is called before each prompt and on_progress(prompt_id, result) after.
+
+    Raises an AppError before anything is generated if generation is switched off,
+    more images are chosen than allowed, or a chosen prompt is empty or too long.
     """
     results = []
     prompts = {p["id"]: p for p in prompt_data["prompts"]}
+    if prompt_ids:
+        validation.ensure_generation_enabled()
+        validation.validate_image_count(len(prompt_ids))
+        for prompt_id in prompt_ids:
+            if prompt_id in prompts:
+                validation.validate_image_prompt(prompts[prompt_id]["text"], label=f"Prompt {prompt_id}")
     provider_error = None
     try:
         if not isinstance(provider, generateImage.ImageProvider):
