@@ -1,5 +1,10 @@
-#Environment variables
+#Environment variables (keep .env.example tracked)
 .env
+!.env.example
+
+#Local usage database (added in a later checkpoint)
+*.db
+*.sqlite3
 
 #Generated outputs and inputs
 output/*

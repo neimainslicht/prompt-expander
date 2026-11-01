@@ -1,14 +1,11 @@
-import os
-from dotenv import load_dotenv
+import config
+from logging_config import redact
 from google import genai
 from google.genai.errors import APIError
 from tenacity import (
     retry, stop_after_attempt, retry_if_exception, wait_random_exponential
 )
 from datetime import datetime
-
-# Load variables from the .env file into the system environment
-load_dotenv()
 
 _client = None
 
@@ -17,10 +14,7 @@ def get_client():
     """Create the Gemini client on first use so importing this module never needs API_KEY."""
     global _client
     if _client is None:
-        api_key = os.getenv("API_KEY")
-        if not api_key:
-            raise RuntimeError("API_KEY is not set.")
-        _client = genai.Client(api_key=api_key)
+        _client = genai.Client(api_key=config.require_secret("API_KEY"))
     return _client
 
 def should_retry_gemini(e: Exception) -> bool:
@@ -89,9 +83,9 @@ def generate_prompt_text(prompt_idea):
     except APIError as e:
         if e.code == 429 and "per day" in str(e).lower():
             return None, "Daily API quota exceeded. Please wait until tomorrow or upgrade your plan."
-        return None, f"Gemini API failed with status {e.code}: {e}"
+        return None, redact(f"Gemini API failed with status {e.code}: {e}")
     except Exception as e:
-        return None, f"Failed to generate prompts due to an unexpected error: {e}"
+        return None, redact(f"Failed to generate prompts due to an unexpected error: {e}")
 
 
 def generatePrompt(prompt_idea):

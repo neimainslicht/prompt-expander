@@ -3,6 +3,8 @@ import sys
 
 import questionary
 
+import config
+import logging_config
 import services
 
 
@@ -130,4 +132,10 @@ def main_menu():
 
 
 if __name__ == "__main__":
+    logging_config.configure_logging()
+    try:
+        config.get_settings()  # fail fast on invalid limits or budgets
+    except config.ConfigError as e:
+        print(f"[Error] {e}")
+        sys.exit(1)
     main_menu()

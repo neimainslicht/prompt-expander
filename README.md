@@ -17,6 +17,40 @@ A Python application that transforms short, simple prompts into detailed, high-q
 - `services.py` holds the workflows (expand ideas, list/load prompt files, generate images). It takes plain inputs, returns result objects, and never prompts, prints, or reads API keys. A future web backend should import this module.
 - `generatePrompts.py` (Gemini) and `generateImage.py` (image providers) are the only modules that read `API_KEY` / `HF_TOKEN` from `.env`. Keys and provider-specific code stay on the backend and must never be sent to a browser.
 
+## Setup and configuration
+
+```text
+pip install -r requirements.txt
+copy .env.example .env      (then edit .env)
+python main.py
+python -m pytest            (no API keys needed, no credits spent)
+```
+
+All settings live in `config.py` and are read from environment variables, with `.env` as a fallback. `.env` is git-ignored; `.env.example` holds placeholders only. Invalid values (non-numbers, zero or negative limits, an unknown time zone, a per-request image limit above the daily limit) stop the app at startup with a message naming the setting. They are never silently replaced by a default. Missing API keys are reported when a provider is first used, not at import.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `API_KEY` | none | Gemini key (secret) |
+| `HF_TOKEN` | none | Hugging Face token (secret) |
+| `GENERATION_ENABLED` | `true` | Global switch for new generation (`true`/`false`) |
+| `MAX_PROMPTS_PER_REQUEST` | `10` | Prompts per Gemini request |
+| `MAX_IMAGES_PER_REQUEST` | `2` | Images per request |
+| `MAX_CONCEPT_LENGTH` | `500` | Characters in an idea |
+| `MAX_IMAGE_PROMPT_LENGTH` | `2000` | Characters in an image prompt |
+| `MAX_GENERATION_REQUESTS_PER_MINUTE` | `3` | Generation requests per minute |
+| `MAX_IMAGES_PER_DAY` | `5` | Images per day |
+| `QUOTA_TIMEZONE` | `Asia/Jerusalem` | IANA time zone where the daily quota resets at midnight |
+| `GEMINI_MAX_REQUESTS_PER_MINUTE` / `_PER_DAY` | `5` / `50` | Free-tier request caps. Conservative app-side values, not Google's published limits: check yours in AI Studio |
+| `HF_MONTHLY_BUDGET_USD` | `4.75` | Application-side Hugging Face budget (USD) |
+| `HF_BUDGET_SAFETY_MARGIN_PERCENT` | `10` | Share of that budget held back, so the app plans to spend at most 90% |
+
+Gemini (free tier) and Hugging Face (prepaid credits) are configured separately: Gemini is limited by request counts and is not treated as spending, while Hugging Face has a dollar budget. The app's figures are its own estimates and will not exactly match your provider balance; the provider's dashboard is the source of truth.
+
+**Status:** this stage only defines and validates the settings. The limits are enforced in later stages (validation, usage tracking, quotas and budgets), so the values above do not yet restrict generation.
+
+### Credential safety
+Keys are read only through `config.require_secret()` right before a provider is used. Error messages and logs go through `logging_config.redact()`, which removes the configured keys and key-shaped strings (Bearer tokens, `hf_...`, `AIza...`, `Authorization:`/`api_key=` values). Logging records exception tracebacks unredacted, so don't log exceptions with `exc_info`.
+
 ## Examples
 
 ### Text to Prompts:

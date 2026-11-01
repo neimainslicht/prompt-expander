@@ -2,12 +2,12 @@ import os
 from abc import ABC, abstractmethod
 
 import httpx
-from dotenv import load_dotenv
 from huggingface_hub import InferenceClient
 from huggingface_hub.errors import InferenceTimeoutError
 from tenacity import Retrying, stop_after_attempt, retry_if_exception, wait_random_exponential
 
-load_dotenv()
+import config
+from logging_config import redact
 
 MAX_ATTEMPTS = 5
 WAIT_MULTIPLIER = 0.5
@@ -47,12 +47,9 @@ class HuggingFaceImageProvider(ImageProvider):
     @property
     def client(self):
         if self._client is None:
-            api_key = os.getenv("HF_TOKEN")
-            if not api_key:
-                raise RuntimeError("HF_TOKEN is not set.")
             self._client = InferenceClient(
                 provider=self.provider,
-                api_key=api_key,
+                api_key=config.require_secret("HF_TOKEN"),
                 timeout=self.timeout,
             )
         return self._client
@@ -139,7 +136,7 @@ def generate_image_with_error(prompt, provider=None):
         return call_image_api(provider, prompt), None
     except Exception as e:
         message = provider.describe_error(e) if isinstance(provider, ImageProvider) else str(e)
-        return None, message
+        return None, redact(message)
 
 
 def generate_image(prompt, provider=None):
