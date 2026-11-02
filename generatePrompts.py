@@ -9,6 +9,8 @@ from tenacity import (
 )
 from datetime import datetime
 
+GEMINI_MODEL = "gemini-2.5-flash"
+
 _client = None
 
 
@@ -41,7 +43,7 @@ def should_retry_gemini(e: Exception) -> bool:
     reraise=True
 )
 
-def call_gemini(prompt_idea, num_prompts=None):
+def call_gemini(prompt_idea, num_prompts=None, observer=None):
     num_prompts = num_prompts or config.get_settings().max_prompts_per_request
     prompt = f"""
     Given the following concept, create {num_prompts} detailed image generation prompts. Each prompt should include some combination of:
@@ -69,14 +71,27 @@ def call_gemini(prompt_idea, num_prompts=None):
     Concept: {prompt_idea}
     """
 
-    response = get_client().models.generate_content(
-        model="gemini-2.5-flash",
-        contents=prompt, 
-        config={"response_mime_type": "application/json"} 
-    )
+    client = get_client()
+    # the decorator above re-runs this function for every retry, so each real call is reported here
+    attempt_id = observer.started() if observer else None
+    try:
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt,
+            config={"response_mime_type": "application/json"}
+        )
+    except Exception as e:
+        if observer:
+            observer.finished(attempt_id, error=e)
+        raise
+    if observer:
+        meta = getattr(response, "usage_metadata", None)
+        observer.finished(attempt_id,
+                          input_tokens=getattr(meta, "prompt_token_count", None),
+                          output_tokens=getattr(meta, "candidates_token_count", None))
     return response
 
-def generate_prompt_text(prompt_idea, num_prompts=None):
+def generate_prompt_text(prompt_idea, num_prompts=None, observer=None):
     """Return (json_text, error_message). Exactly one of the two is None.
 
     The request is validated first, so nothing invalid or disabled reaches Gemini.
@@ -88,7 +103,7 @@ def generate_prompt_text(prompt_idea, num_prompts=None):
     except (AppError, config.ConfigError) as e:
         return None, getattr(e, "message", None) or str(e)
     try:
-        response = call_gemini(prompt_idea=prompt_idea, num_prompts=num_prompts)
+        response = call_gemini(prompt_idea=prompt_idea, num_prompts=num_prompts, observer=observer)
         return response.text, None
     except APIError as e:
         if e.code == 429 and "per day" in str(e).lower():

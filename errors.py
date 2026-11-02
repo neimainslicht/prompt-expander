@@ -37,3 +37,13 @@ class GenerationDisabledError(AppError):
 
     def __init__(self):
         super().__init__("Generation is temporarily unavailable. You can still view existing files.")
+
+
+class UsageUnavailableError(AppError):
+    """Usage could not be recorded, so generation was not started (fails closed)."""
+
+    code = "usage_unavailable"
+    http_status = 503
+
+    def __init__(self):
+        super().__init__("Usage tracking is unavailable, so generation was not started. Please try again later.")

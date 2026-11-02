@@ -32,6 +32,7 @@ DEFAULTS = {
     "MAX_GENERATION_REQUESTS_PER_MINUTE": "3",
     "MAX_IMAGES_PER_DAY": "5",
     "QUOTA_TIMEZONE": "Asia/Jerusalem",
+    "USAGE_DB_PATH": "usage.db",  # SQLite file holding the usage records (git-ignored)
     # Gemini (free tier): request counts only, no spending. These are conservative
     # application-side caps, not Google's published limits; check yours in AI Studio.
     "GEMINI_MAX_REQUESTS_PER_MINUTE": "5",
@@ -55,6 +56,7 @@ class Settings:
     max_generation_requests_per_minute: int
     max_images_per_day: int
     quota_timezone: str  # IANA name; the daily quota resets at midnight in this zone
+    usage_db_path: str
     gemini_max_requests_per_minute: int
     gemini_max_requests_per_day: int
     hf_monthly_budget_usd: float  # the balance you are willing to track, before the margin
@@ -108,6 +110,13 @@ def _parse_timezone(name, raw):
     return key
 
 
+def _parse_path(name, raw):
+    path = raw.strip()
+    if not path:
+        raise ValueError(f"{name} must not be blank.")
+    return path
+
+
 def load_settings(env: Optional[Mapping[str, str]] = None) -> Settings:
     """Build Settings from env (default: os.environ), checking every value.
 
@@ -135,6 +144,7 @@ def load_settings(env: Optional[Mapping[str, str]] = None) -> Settings:
         max_generation_requests_per_minute=read("MAX_GENERATION_REQUESTS_PER_MINUTE", _parse_int),
         max_images_per_day=read("MAX_IMAGES_PER_DAY", _parse_int),
         quota_timezone=read("QUOTA_TIMEZONE", _parse_timezone),
+        usage_db_path=read("USAGE_DB_PATH", _parse_path),
         gemini_max_requests_per_minute=read("GEMINI_MAX_REQUESTS_PER_MINUTE", _parse_int),
         gemini_max_requests_per_day=read("GEMINI_MAX_REQUESTS_PER_DAY", _parse_int),
         hf_monthly_budget_usd=read("HF_MONTHLY_BUDGET_USD", _parse_float, 0, exclusive_min=True),

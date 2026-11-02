@@ -40,13 +40,14 @@ All settings live in `config.py` and are read from environment variables, with `
 | `MAX_GENERATION_REQUESTS_PER_MINUTE` | `3` | Generation requests per minute |
 | `MAX_IMAGES_PER_DAY` | `5` | Images per day |
 | `QUOTA_TIMEZONE` | `Asia/Jerusalem` | IANA time zone where the daily quota resets at midnight |
+| `USAGE_DB_PATH` | `usage.db` | SQLite file holding usage records (git-ignored) |
 | `GEMINI_MAX_REQUESTS_PER_MINUTE` / `_PER_DAY` | `5` / `50` | Free-tier request caps. Conservative app-side values, not Google's published limits: check yours in AI Studio |
 | `HF_MONTHLY_BUDGET_USD` | `4.75` | Application-side Hugging Face budget (USD) |
 | `HF_BUDGET_SAFETY_MARGIN_PERCENT` | `10` | Share of that budget held back, so the app plans to spend at most 90% |
 
 Gemini (free tier) and Hugging Face (prepaid credits) are configured separately: Gemini is limited by request counts and is not treated as spending, while Hugging Face has a dollar budget. The app's figures are its own estimates and will not exactly match your provider balance; the provider's dashboard is the source of truth.
 
-**Status:** request-size limits and the generation switch are enforced (see below). Usage tracking, per-minute and daily limits, and budgets are not enforced yet, so `MAX_GENERATION_REQUESTS_PER_MINUTE`, `MAX_IMAGES_PER_DAY`, the Gemini caps and the Hugging Face budget are defined but do not restrict anything yet.
+**Status:** request-size limits, the generation switch and usage tracking are in place (see below). Per-minute and daily limits and budgets are not enforced yet, so `MAX_GENERATION_REQUESTS_PER_MINUTE`, `MAX_IMAGES_PER_DAY`, the Gemini caps and the Hugging Face budget are defined but do not restrict anything yet.
 
 **Hugging Face budget:** `HF_MONTHLY_BUDGET_USD` is the full amount you want to track, not a per-month allowance (the name will be changed when budgets are enforced). The 10% margin is applied once, in `Settings.hf_usable_budget_usd`. When budgets are enforced, spending is counted cumulatively across all months against that ceiling, so it does not reset monthly. If you add credits, raise the setting yourself.
 
@@ -61,6 +62,32 @@ Checks live in `validation.py` and run before any provider is called. Over-long 
 
 ### Credential safety
 Keys are read only through `config.require_secret()` right before a provider is used. Error messages and logs go through `logging_config.redact()`, which removes the configured keys and key-shaped strings (Bearer tokens, `hf_...`, `AIza...`, `Authorization:`/`api_key=` values). Logging records exception tracebacks unredacted, so don't log exceptions with `exc_info`.
+
+### Usage tracking
+Every generation request is recorded in a local SQLite file (`USAGE_DB_PATH`, default `usage.db`, git-ignored) by `usage.py`. Code depends on the `UsageStore` interface, so the SQLite implementation can later be replaced (for example by PostgreSQL).
+
+Two tables, linked by `request_id`:
+
+- `requests`: one row per logical request (one idea expanded, or one batch of images): id, `user_id` (`local` until there is authentication), UTC timestamps, operation (`prompt_generation` / `image_generation`), provider and model, items requested and succeeded, outcome (`pending`, `succeeded`, `partially_succeeded`, `failed`, `rejected`), estimated and actual cost columns, and a short error category.
+- `provider_attempts`: one row per real provider call, retries included. Each has its request, the item (the prompt id in a batch), an attempt number (1, 2, 3 for retries of the same item), status, error category, HTTP status and, for Gemini, token counts.
+
+How it behaves:
+
+- A retry adds an attempt to the same request; it never creates a second request. The attempt row is written before the call and updated after it, so a call that was cut off (Ctrl+C, crash) stays as `started` and is treated as possibly billed.
+- Usage is counted from `provider_attempts` only. A rejected request (too long, too many images, generation off) is stored for diagnostics with outcome `rejected` and no attempts, so it counts as no usage and no spending.
+- A failed call is recorded, not dropped, because a failed call may still be billed. A save failure after a successful image call is recorded as a failed image but a succeeded attempt.
+- If a request or an attempt can't be recorded, the call is not made (generation fails closed). A failure to record a result after a call is only logged.
+- Cost columns exist but stay empty for now. Pricing is not guessed; cost estimates and budgets arrive with budget enforcement.
+- Stored: ids, counts, timestamps, model names, token counts, error categories. Never stored: API keys, prompt text, raw provider error messages.
+- Hugging Face spending will be counted cumulatively across all months, with no monthly reset, against `Settings.hf_usable_budget_usd`.
+
+To look at recent usage:
+
+```text
+python -c "import usage; [print(r['created_at'], r['operation'], r['outcome'], r['items_succeeded'], '/', r['items_requested'], r['error_category']) for r in usage.get_store().list_requests(20)]"
+```
+
+Limits of this stage: a request stuck as `pending` after a crash is not cleaned up automatically, and calling `generatePrompts` / `generateImage` functions directly (not through `services`) is validated but not recorded.
 
 ## Examples
 

@@ -35,6 +35,10 @@ class ImageProvider(ABC):
     def describe_error(self, e: Exception) -> str:
         return str(e)
 
+    def usage_identity(self):
+        """(provider, model) labels stored in usage records."""
+        return type(self).__name__.lower(), None
+
 
 class HuggingFaceImageProvider(ImageProvider):
     RETRYABLE_STATUS = {429, 500, 502, 503, 504}
@@ -58,6 +62,9 @@ class HuggingFaceImageProvider(ImageProvider):
 
     def generate(self, prompt):
         return self.client.text_to_image(prompt, model=self.model)
+
+    def usage_identity(self):
+        return f"huggingface/{self.provider}", self.model
 
     @staticmethod
     def _status(e):
@@ -120,17 +127,32 @@ def _wait_strategy(provider):
     return wait
 
 
-def call_image_api(provider: ImageProvider, prompt):
+def call_image_api(provider: ImageProvider, prompt, observer=None):
+    """Call the provider with retries. If an observer is given, it is told about every
+    real call (the first try and each retry) so each one can be recorded."""
+
+    def attempt(prompt):
+        if observer is None:
+            return provider.generate(prompt)
+        attempt_id = observer.started()
+        try:
+            image = provider.generate(prompt)
+        except Exception as e:
+            observer.finished(attempt_id, error=e)
+            raise
+        observer.finished(attempt_id)
+        return image
+
     retrying = Retrying(
         stop=stop_after_attempt(MAX_ATTEMPTS),
         wait=_wait_strategy(provider),
         retry=retry_if_exception(provider.is_retryable),
         reraise=True,
     )
-    return retrying(provider.generate, prompt)
+    return retrying(attempt, prompt)
 
 
-def generate_image_with_error(prompt, provider=None):
+def generate_image_with_error(prompt, provider=None, observer=None):
     """Return (image, error_message). Exactly one of the two is None."""
     try:
         validation.ensure_generation_enabled()
@@ -140,7 +162,7 @@ def generate_image_with_error(prompt, provider=None):
     try:
         if not isinstance(provider, ImageProvider):
             provider = get_provider(provider)
-        return call_image_api(provider, prompt), None
+        return call_image_api(provider, prompt, observer), None
     except Exception as e:
         message = provider.describe_error(e) if isinstance(provider, ImageProvider) else str(e)
         return None, redact(message)

@@ -193,7 +193,7 @@ def test_image_error_message_is_redacted(monkeypatch):
 def test_gemini_error_message_is_redacted(monkeypatch):
     monkeypatch.setenv("API_KEY", FAKE_GEMINI)
 
-    def boom(prompt_idea, num_prompts=None):
+    def boom(prompt_idea, num_prompts=None, observer=None):
         raise RuntimeError(f"bad request x-goog-api-key: {FAKE_GEMINI}")
 
     monkeypatch.setattr(generatePrompts, "call_gemini", boom)

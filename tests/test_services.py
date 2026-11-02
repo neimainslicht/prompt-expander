@@ -197,7 +197,7 @@ GOOD = json.dumps({"prompts": [{"text": "p1"}, {"text": "p2"}]})
 def stub_gemini(monkeypatch, replies):
     """replies maps idea -> (text, error)."""
     monkeypatch.setattr(generatePrompts, "generate_prompt_text",
-                        lambda idea, num_prompts=None: replies.get(idea, (None, "Empty prompt entered.")))
+                        lambda idea, num_prompts=None, observer=None: replies.get(idea, (None, "Empty prompt entered.")))
 
 
 def test_expand_idea_success_saves_file(env, monkeypatch):

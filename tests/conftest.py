@@ -63,10 +63,14 @@ def no_wait(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def default_settings(monkeypatch):
-    """Run every test with the documented default limits, whatever the developer's .env says."""
+def default_settings(monkeypatch, tmp_path_factory):
+    """Run every test with the documented default limits, whatever the developer's .env says.
+
+    Usage records go to a throwaway database, never the developer's real usage.db.
+    """
     for name, value in config.DEFAULTS.items():
         monkeypatch.setenv(name, value)
+    monkeypatch.setenv("USAGE_DB_PATH", str(tmp_path_factory.mktemp("usage") / "usage.db"))
     config.get_settings.cache_clear()
     yield
     config.get_settings.cache_clear()

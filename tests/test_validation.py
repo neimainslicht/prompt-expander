@@ -28,7 +28,7 @@ class GeminiSpy:
     def __init__(self, reply=GOOD_JSON):
         self.reply, self.calls = reply, []
 
-    def __call__(self, prompt_idea, num_prompts=None):
+    def __call__(self, prompt_idea, num_prompts=None, observer=None):
         self.calls.append((prompt_idea, num_prompts))
         return types.SimpleNamespace(text=self.reply)
 
