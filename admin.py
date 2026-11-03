@@ -14,6 +14,7 @@ import argparse
 import sys
 
 import config
+import limits
 import money
 import usage
 from usage import Quota
@@ -31,8 +32,20 @@ def _usd(micros, places=4):
 
 def status_report(store, settings) -> str:
     tz = settings.quota_timezone
-    cost = store.cost_summary(HF)
+    # the same window the budget check uses, so this report and the enforcement can never disagree
+    window = limits.budget_quota(settings, HF)
+    cost = store.cost_summary(HF, window)
+    all_time = store.cost_summary(HF)
     ceiling = settings.hf_usable_budget_micros
+    margin = format(settings.hf_budget_safety_margin_percent.normalize(), "f")
+    if settings.hf_budget_is_monthly:
+        heading = (f"Hugging Face budget: MONTHLY mode (counts the current calendar month in {tz};"
+                   " resets on the 1st; the app's estimate, not your provider balance)")
+        allowance = f"HF_BUDGET_USD {_usd(settings.hf_budget_micros, 2)} per month"
+    else:
+        heading = ("Hugging Face budget: CUMULATIVE mode (counts all recorded history, never resets;"
+                   " the app's estimate, not your provider balance)")
+        allowance = f"HF_BUDGET_USD {_usd(settings.hf_budget_micros, 2)} in total"
     images_today = store.measure(_quota(usage.IMAGES, settings.max_images_per_day, day_timezone=tz))
     requests_minute = store.measure(_quota(usage.REQUESTS, settings.max_generation_requests_per_minute, window_seconds=60))
     gemini_minute = store.measure(_quota(usage.ATTEMPTS, settings.gemini_max_requests_per_minute,
@@ -43,9 +56,8 @@ def status_report(store, settings) -> str:
     lines = [
         f"Generation switch: {'ON' if settings.generation_enabled else 'OFF'} (GENERATION_ENABLED)",
         "",
-        "Hugging Face budget (cumulative, all months; the app's estimate, not your provider balance)",
-        f"  usable ceiling       {_usd(ceiling)}  (HF_BUDGET_USD {_usd(settings.hf_budget_micros, 2)}"
-        f" minus {format(settings.hf_budget_safety_margin_percent.normalize(), 'f')}% margin)",
+        heading,
+        f"  usable ceiling       {_usd(ceiling)}  ({allowance} minus {margin}% margin)",
         f"  committed            {_usd(cost['committed'])}",
         f"    reserved (active)  {_usd(cost['reserved_remaining'])}",
         f"    estimated spent    {_usd(cost['estimated_consumed'])}   (every attempt, failed ones included)",
@@ -55,6 +67,8 @@ def status_report(store, settings) -> str:
         "  cost per image       "
         + (f"{_usd(price)} (HF_COST_PER_IMAGE_USD)" if price is not None
            else "NOT SET - image generation is refused until HF_COST_PER_IMAGE_USD is set"),
+        f"  all recorded history {_usd(all_time['committed'])}"
+        + ("   (kept; only this month is counted)" if settings.hf_budget_is_monthly else "   (all of it is counted)"),
         "",
         f"Images today ({tz}):         {images_today} of {settings.max_images_per_day}",
         f"Generation requests, last minute: {requests_minute} of {settings.max_generation_requests_per_minute}",

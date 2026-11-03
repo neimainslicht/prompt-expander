@@ -5,6 +5,8 @@
 #Local usage database (added in a later checkpoint)
 *.db
 *.sqlite3
+usage.db-wal
+usage.db-shm
 
 #Generated outputs and inputs
 output/*

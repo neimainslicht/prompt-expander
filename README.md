@@ -44,7 +44,8 @@ All settings live in `config.py` and are read from environment variables, with `
 | `STALE_REQUEST_SECONDS` | `900` | A request left pending with no activity this long (seconds) is treated as abandoned by a crash. Must be at least 240, twice the longest provider timeout |
 | `GEMINI_PLAN` | `free` | Only `free` is accepted: Gemini is limited by request counts, not spending |
 | `GEMINI_MAX_REQUESTS_PER_MINUTE` / `_PER_DAY` | `5` / `50` | Free-tier request caps. Conservative app-side values, not Google's published limits: check yours in AI Studio |
-| `HF_BUDGET_USD` | `4.75` | Total Hugging Face budget the app tracks, in USD, at most 6 decimal places (renamed from `HF_MONTHLY_BUDGET_USD`) |
+| `HF_BUDGET_MODE` | `cumulative` | How the Hugging Face budget is counted: `cumulative` (all recorded history, never resets) or `monthly` (the current calendar month in `QUOTA_TIMEZONE`, resets on the 1st). Anything else is an error |
+| `HF_BUDGET_USD` | `4.75` | Cumulative mode: the total you track, e.g. remaining credit. Monthly mode: the allowance per calendar month, which **must be written explicitly**. At most 6 decimal places (renamed from `HF_MONTHLY_BUDGET_USD`) |
 | `HF_BUDGET_SAFETY_MARGIN_PERCENT` | `10` | Share of that budget held back, so the app plans to spend at most 90% |
 | `HF_COST_PER_IMAGE_USD` | none | **Required for images.** Your estimate of what one image call costs, in USD, at most 6 decimal places. Not guessed by the app |
 
@@ -99,7 +100,9 @@ Limits are checked, and the reservation recorded, in one atomic database step (`
 | `MAX_GENERATION_REQUESTS_PER_MINUTE` | Authorised requests in the last 60 seconds (an idea, or an image batch). Retries are not new requests. Rejected requests don't count |
 | `MAX_IMAGES_PER_DAY` | **Images, not attempts.** Per calendar day in `QUOTA_TIMEZONE` (default `Asia/Jerusalem`), resetting at local midnight; restarts don't reset it. A running request counts the images it reserved; a finished one counts the images that got a provider attempt, so images never attempted are released. Retries of one image are never extra images. A request counts toward the day it started |
 | `GEMINI_MAX_REQUESTS_PER_MINUTE` / `_PER_DAY` | **Every real Gemini call, retries included**, checked again before each retry |
-| `HF_BUDGET_USD` (after the margin) | Cumulative Hugging Face spend, all months, no monthly reset. Counted against `Settings.hf_usable_budget_usd` only, so the margin is applied once |
+| `HF_BUDGET_USD` (after the margin) | Hugging Face spend against `Settings.hf_usable_budget_micros`, so the margin is applied once. `cumulative`: all recorded spending, no reset ($4.75 gives $4.275 usable). `monthly`: spending since local midnight on the 1st in `QUOTA_TIMEZONE` ($5 gives $4.50 usable per month). History is never deleted either way |
+
+**Budget modes.** `HF_BUDGET_MODE` chooses what the budget counts; nothing else changes (same margin, reservations, retry accounting and atomic checks). To change mode, edit `.env` and restart; the exact steps are in DEVELOPMENT_GUIDE.md section 6. Switching never deletes usage records: the mode only decides which stored attempts and adjustments are added up.
 
 A refused request raises or returns a `LimitExceededError` (HTTP 429 for a web layer) with a message and, for rate limits, `retry_after_seconds`. In batch mode the app waits out a per-minute limit instead of failing the remaining ideas, and prints a `[Waiting] ...` line first so it doesn't look frozen.
 
@@ -124,7 +127,7 @@ When a request is refused for the budget or a quota:
 
 1. Run `python admin.py status`. It shows the budget (committed, reserved, estimated, confirmed, adjustments), today's images, and recent requests.
 2. Compare with your provider's dashboard, then do one of:
-   - **Added credits:** raise `HF_BUDGET_USD` in `.env` (it is the total tracked since the start, not a monthly amount) and restart.
+   - **Added credits:** raise `HF_BUDGET_USD` in `.env` and restart (in `cumulative` mode it is the total tracked since the start; in `monthly` mode it is the per-month allowance).
    - **The app's estimate is too high or low:** record a correction, kept with your note: `python admin.py adjust --provider huggingface --amount=-1.25 --note "dashboard shows 1.25 less"` (negative lowers recorded spend; amounts are exact, up to 6 decimal places).
    - **Known real cost of a call:** `python admin.py record-actual --attempt-id 17 --usd 0.031`.
    - **Stuck request after a crash:** `python admin.py sweep-stale`.

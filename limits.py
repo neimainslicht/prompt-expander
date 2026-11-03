@@ -14,8 +14,10 @@ What each limit counts:
                                        are never extra images.
   GEMINI_MAX_REQUESTS_PER_MINUTE / _PER_DAY
                                        real Gemini calls, every attempt including retries.
-  HF_BUDGET_USD (with margin)          cumulative spend on Hugging Face, all months, in USD; every
-                                       attempt costs the configured per-call price, even if it failed.
+  HF_BUDGET_USD (with margin)          Hugging Face spend in USD; every attempt costs the configured
+                                       per-call price, even if it failed. HF_BUDGET_MODE=cumulative counts
+                                       all recorded history; HF_BUDGET_MODE=monthly counts the current
+                                       calendar month in QUOTA_TIMEZONE (see budget_quota).
 
 For an image batch the whole batch is authorised and reserved before the first call:
 daily images, and the cost of exactly one attempt per image. Each image's reservation
@@ -75,6 +77,26 @@ def prompt_plan(provider_label, model, settings=None) -> Plan:
         attempt_cost_micros=pricing.call_cost_micros(provider_label, settings))
 
 
+def budget_quota(settings, family, adding=0) -> Quota:
+    """The image budget as a Quota. This is the single definition of what the budget counts:
+    cumulative mode counts all recorded history (no time window); monthly mode counts only the
+    current calendar month in QUOTA_TIMEZONE. The ceiling is always settings.hf_usable_budget_micros
+    (the safety margin is applied there, once, and not again here)."""
+    monthly = settings.hf_budget_is_monthly
+    review = "Run 'python admin.py status' to review (see README, 'Restoring generation')."
+    if monthly:
+        message = (f"The {family} monthly budget would be exceeded: {{current}} of {{ceiling}} is already used or "
+                   f"reserved this month, and this request needs about {money.format_usd(adding)}. "
+                   f"It resets on the 1st of next month ({settings.quota_timezone}). {review}")
+    else:
+        message = (f"The {family} budget would be exceeded: {{current}} of {{ceiling}} is already used or reserved "
+                   f"(cumulative, all months), and this request needs about {money.format_usd(adding)}. {review}")
+    return Quota(
+        code="budget_exceeded", metric=usage.COST_MICROS, adding=adding, provider_prefix=family,
+        ceiling=settings.hf_usable_budget_micros,
+        month_timezone=settings.quota_timezone if monthly else None, message=message)
+
+
 def image_plan(provider_label, model, count, settings=None) -> Plan:
     """Plan for a batch of `count` images. Raises PricingUnavailableError if the cost is unknown."""
     settings = settings or config.get_settings()
@@ -86,12 +108,7 @@ def image_plan(provider_label, model, count, settings=None) -> Plan:
         message="Daily image limit reached: {current} of {ceiling} images already used or reserved today, "
                 f"and this request needs {count}. It resets at midnight ({settings.quota_timezone}).")
     reserved = call_cost * count  # one first attempt per image
-    budget = Quota(
-        code="budget_exceeded", metric=usage.COST_MICROS, adding=reserved, provider_prefix=family,
-        ceiling=settings.hf_usable_budget_micros,
-        message=f"The {family} budget would be exceeded: {{current}} of {{ceiling}} is already used or reserved, "
-                f"and this request needs about {money.format_usd(reserved)}. Run 'python admin.py status' to review "
-                "(see README, 'Restoring generation').")
+    budget = budget_quota(settings, family, adding=reserved)
     return Plan(
         provider=provider_label, model=model, items=count,
         begin_quotas=(_request_rate_quota(settings), daily, budget),

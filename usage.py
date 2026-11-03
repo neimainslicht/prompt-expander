@@ -213,7 +213,8 @@ class Quota:
     COST_MICROS metric both numbers are whole microdollars.
 
     The window is the last `window_seconds`, or the current calendar day in `day_timezone`,
-    or (neither) all time. `provider_prefix` limits requests/attempts/cost to one provider
+    or the current calendar month in `month_timezone` (from the 1st at local midnight), or
+    (none of them) all time. `provider_prefix` limits requests/attempts/cost to one provider
     family ('huggingface' matches 'huggingface/fal-ai'). `message` may use {current},
     {ceiling} and {remaining}.
     """
@@ -225,6 +226,7 @@ class Quota:
     provider_prefix: Optional[str] = None
     window_seconds: Optional[int] = None
     day_timezone: Optional[str] = None
+    month_timezone: Optional[str] = None
 
 
 class UsageStore(ABC):
@@ -267,8 +269,9 @@ class UsageStore(ABC):
         """Current value of the quantity a quota limits."""
 
     @abstractmethod
-    def cost_summary(self, provider_prefix) -> dict:
-        """Reserved, estimated, confirmed-actual and adjusted spend for a provider family (microdollars)."""
+    def cost_summary(self, provider_prefix, quota=None) -> dict:
+        """Reserved, estimated, confirmed-actual and adjusted spend for a provider family (microdollars).
+        With a quota, only spending inside that quota's time window is counted (all time otherwise)."""
 
     @abstractmethod
     def add_cost_adjustment(self, provider, amount_micros, note) -> int:
@@ -388,7 +391,7 @@ class SqliteUsageStore(UsageStore):
     # ------------------------------------------------------------ measuring
     @staticmethod
     def _since_op(quota):
-        """Rolling windows exclude an event exactly window_seconds old; a day includes its first instant."""
+        """Rolling windows exclude an event exactly window_seconds old; a day or month includes its first instant."""
         return ">" if quota.window_seconds else ">="
 
     @staticmethod
@@ -401,6 +404,13 @@ class SqliteUsageStore(UsageStore):
             local = now.astimezone(tz)
             start = datetime.combine(local.date(), time.min, tzinfo=tz)
             next_start = datetime.combine(local.date() + timedelta(days=1), time.min, tzinfo=tz)
+            return start.astimezone(timezone.utc), max(1, math.ceil((next_start - now).total_seconds()))
+        if quota.month_timezone:
+            tz = ZoneInfo(quota.month_timezone)
+            first = now.astimezone(tz).date().replace(day=1)
+            next_first = (first + timedelta(days=32)).replace(day=1)  # always lands in the next month
+            start = datetime.combine(first, time.min, tzinfo=tz)
+            next_start = datetime.combine(next_first, time.min, tzinfo=tz)
             return start.astimezone(timezone.utc), max(1, math.ceil((next_start - now).total_seconds()))
         return None, None
 
@@ -431,12 +441,20 @@ class SqliteUsageStore(UsageStore):
                 sql, args = sql + f" AND r.created_at {op} ?", [since_iso]
             return conn.execute(sql, args).fetchone()[0]
         if quota.metric == COST_MICROS:
-            return self._committed_cost(conn, quota.provider_prefix)["committed"]
+            return self._committed_cost(conn, quota.provider_prefix, since_iso)["committed"]
         raise ValueError(f"Unknown quota metric {quota.metric!r}.")
 
-    def _committed_cost(self, conn, prefix) -> dict:
-        """Money already spent or held for a provider family, all time (no monthly reset)."""
+    def _committed_cost(self, conn, prefix, since_iso=None) -> dict:
+        """Money spent or held for a provider family.
+
+        With since_iso=None (cumulative budget) every attempt and adjustment ever recorded counts. With a
+        start time (monthly budget) only attempts that started, and adjustments entered, at or after it count.
+        Nothing is deleted either way: the window only decides which stored rows are added up. Reservations
+        of requests that are still pending always count, because they are about to become attempts now.
+        """
         a_clause, a_args = _provider_clause("a.provider", prefix)
+        if since_iso:
+            a_clause, a_args = a_clause + " AND a.started_at >= ?", a_args + [since_iso]
         estimated = conn.execute(
             f"SELECT COALESCE(SUM(COALESCE(a.estimated_cost_micros, 0)), 0) FROM provider_attempts a"
             f" WHERE a.actual_cost_micros IS NULL AND {a_clause}", a_args).fetchone()[0]
@@ -451,6 +469,8 @@ class SqliteUsageStore(UsageStore):
             f" FROM requests r WHERE r.outcome = 'pending' AND r.reserved_images > 0"
             f" AND r.reserved_cost_micros IS NOT NULL AND {r_clause}", r_args).fetchone()[0]
         j_clause, j_args = _provider_clause("provider", prefix)
+        if since_iso:  # an adjustment belongs to the period in which it was entered
+            j_clause, j_args = j_clause + " AND created_at >= ?", j_args + [since_iso]
         adjustments = conn.execute(
             f"SELECT COALESCE(SUM(amount_micros), 0) FROM cost_adjustments WHERE {j_clause}", j_args).fetchone()[0]
         return {"reserved_remaining": reserved, "estimated_consumed": estimated, "confirmed_actual": actual,
@@ -552,7 +572,8 @@ class SqliteUsageStore(UsageStore):
         call starts and ends). One that has been silent for longer than `stale_after_seconds` can
         only be a request whose process died, so it is closed as failed / 'abandoned'. Closing it
         frees its reservation (its daily images and unused budget shares), which would otherwise
-        stay locked forever. Called before every new request is authorised, and by
+        stay locked forever. Called before every new request is authorised, before every attempt
+        is started (so retry budget checks don't see dead reservations), and by
         `admin.py sweep-stale`. Returns how many requests were closed.
         """
         def sweep(conn):
@@ -584,6 +605,12 @@ class SqliteUsageStore(UsageStore):
                       quotas=()) -> int:
         if estimated_cost_micros is not None:
             money.require_micros(estimated_cost_micros, "estimated_cost_micros")
+        # Same as in begin_request: release the reservations of crashed requests BEFORE the budget is checked.
+        # Without this, a retry could be refused only because a dead request's reservation was still being
+        # held. A request that is still making progress is not touched (stale means silent past the threshold).
+        # If this request is itself genuinely stale it is closed here, and the check below then refuses the
+        # attempt, so no provider call is made on its behalf.
+        self.sweep_stale()
 
         def insert(conn):
             now = self._now()
@@ -646,9 +673,13 @@ class SqliteUsageStore(UsageStore):
         with closing(self._connect()) as conn:
             return self._measure(conn, quota, self._now())
 
-    def cost_summary(self, provider_prefix) -> dict:
+    def cost_summary(self, provider_prefix, quota=None) -> dict:
+        since_iso = None
+        if quota is not None:
+            since, _ = self._window(quota, self._now())
+            since_iso = _iso(since) if since else None
         with closing(self._connect()) as conn:
-            return self._committed_cost(conn, provider_prefix)
+            return self._committed_cost(conn, provider_prefix, since_iso)
 
     def add_cost_adjustment(self, provider, amount_micros, note) -> int:
         money.require_micros(amount_micros, "amount_micros")

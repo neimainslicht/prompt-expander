@@ -40,7 +40,9 @@ DEFAULTS = {
     "GEMINI_MAX_REQUESTS_PER_MINUTE": "5",
     "GEMINI_MAX_REQUESTS_PER_DAY": "50",
     "GEMINI_PLAN": "free",  # only the free tier is supported: Gemini is limited by request counts, not spending
-    # Hugging Face (prepaid credits): application-side budget in USD, counted cumulatively (no monthly reset).
+    # Hugging Face (prepaid credits): application-side budget in USD.
+    # HF_BUDGET_MODE decides how it is counted: cumulatively (default) or per calendar month (see BUDGET_MODES below).
+    "HF_BUDGET_MODE": "cumulative",
     "HF_BUDGET_USD": "4.75",
     "HF_BUDGET_SAFETY_MARGIN_PERCENT": "10",
     # A request left "pending" with no activity for this long is treated as abandoned (crashed).
@@ -51,6 +53,15 @@ DEFAULTS = {
 # HF_COST_PER_IMAGE_USD: your estimate of what one Hugging Face image call costs (also used for retries).
 
 RENAMED = {"HF_MONTHLY_BUDGET_USD": "HF_BUDGET_USD"}
+
+# How the Hugging Face budget is counted:
+#   cumulative: spending over ALL recorded history counts against the budget; it never resets.
+#               HF_BUDGET_USD is then a remaining balance (e.g. prepaid credit).
+#   monthly:    only spending since the start of the current calendar month (in QUOTA_TIMEZONE) counts;
+#               the budget starts again on the 1st. HF_BUDGET_USD is then a per-month allowance.
+# Either way the 10% (HF_BUDGET_SAFETY_MARGIN_PERCENT) margin is applied once, in Settings.hf_usable_budget_micros.
+# Switching modes never deletes usage records: the mode only changes which records are counted.
+BUDGET_MODES = ("cumulative", "monthly")
 
 # Longest a single provider call may take, and the longest pause between retries. The provider
 # modules import these, so the timeouts they apply and the rule below cannot drift apart.
@@ -82,10 +93,15 @@ class Settings:
     gemini_max_requests_per_minute: int
     gemini_max_requests_per_day: int
     gemini_plan: str
-    hf_budget_usd: Decimal  # the balance you are willing to track in total (all months), before the margin
+    hf_budget_mode: str  # "cumulative" or "monthly"; see BUDGET_MODES
+    hf_budget_usd: Decimal  # cumulative: total balance tracked; monthly: allowance per calendar month (before margin)
     hf_budget_safety_margin_percent: Decimal
     hf_cost_per_image_usd: Optional[Decimal]  # None until configured; see pricing.py
     stale_request_seconds: int
+
+    @property
+    def hf_budget_is_monthly(self) -> bool:
+        return self.hf_budget_mode == "monthly"
 
     @property
     def hf_budget_micros(self) -> int:
@@ -138,6 +154,13 @@ def _parse_usd(name, raw):
     if micros <= 0:
         raise ValueError(f"{name} must be greater than 0, got {raw!r}.")
     return money.micros_to_usd(micros)
+
+
+def _parse_budget_mode(name, raw):
+    mode = raw.strip().lower()
+    if mode not in BUDGET_MODES:
+        raise ValueError(f"{name} must be one of {', '.join(BUDGET_MODES)}, got {raw!r}.")
+    return mode
 
 
 def _parse_percent(name, raw):
@@ -218,6 +241,7 @@ def load_settings(env: Optional[Mapping[str, str]] = None) -> Settings:
         gemini_max_requests_per_minute=read("GEMINI_MAX_REQUESTS_PER_MINUTE", _parse_int),
         gemini_max_requests_per_day=read("GEMINI_MAX_REQUESTS_PER_DAY", _parse_int),
         gemini_plan=read("GEMINI_PLAN", _parse_gemini_plan),
+        hf_budget_mode=read("HF_BUDGET_MODE", _parse_budget_mode),
         hf_budget_usd=read("HF_BUDGET_USD", _parse_usd),
         hf_budget_safety_margin_percent=read("HF_BUDGET_SAFETY_MARGIN_PERCENT", _parse_percent),
         hf_cost_per_image_usd=optional_cost,
@@ -235,6 +259,12 @@ def load_settings(env: Optional[Mapping[str, str]] = None) -> Settings:
         errors.append(
             f"GEMINI_MAX_REQUESTS_PER_MINUTE ({gem_min}) cannot exceed GEMINI_MAX_REQUESTS_PER_DAY ({gem_day})."
         )
+
+    # The default budget ($4.75) is a remaining balance, not a monthly allowance, so monthly mode never
+    # inherits it: the monthly amount must be written down on purpose.
+    if values["hf_budget_mode"] == "monthly" and "HF_BUDGET_USD" not in env:
+        errors.append("HF_BUDGET_MODE=monthly requires HF_BUDGET_USD to be set explicitly "
+                      "(the built-in default is a remaining balance, not a monthly allowance).")
 
     if errors:
         raise ConfigError("Invalid configuration:\n  - " + "\n  - ".join(errors))
