@@ -59,6 +59,19 @@ def validate_image_prompt(prompt, label="The image prompt"):
             length=length, limit=limit)
 
 
+def validate_unique_prompt_ids(prompt_ids):
+    """Each prompt can be generated once per request, so one image's attempts are never mixed with another's."""
+    seen, repeated = set(), set()
+    for prompt_id in prompt_ids:
+        (repeated if prompt_id in seen else seen).add(prompt_id)
+    if repeated:
+        raise ValidationError(
+            "duplicate_prompt_ids",
+            f"Prompt {', '.join(str(i) for i in sorted(repeated))} was selected more than once. "
+            "Select each prompt once per request.",
+            duplicates=sorted(repeated))
+
+
 def validate_image_count(count):
     """Reject a request for more images than allowed in one request."""
     limit = config.get_settings().max_images_per_request

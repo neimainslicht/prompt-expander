@@ -59,8 +59,12 @@ def process_batch_mode():
         else:
             show_expand_result(result)
 
+    def wait(idea, seconds):
+        print(f"[Waiting] Request limit reached. Pausing about {seconds} seconds before continuing "
+              f"with '{idea}'. This is normal, not a freeze...")
+
     try:
-        results = services.expand_ideas(ideas, on_progress=report)
+        results = services.expand_ideas(ideas, on_progress=report, on_wait=wait)
     except AppError as e:
         print(f"[Error] {e.message}")
         input("\nPress Enter to return to main menu...")

@@ -7,6 +7,7 @@ from huggingface_hub.errors import InferenceTimeoutError
 from tenacity import Retrying, stop_after_attempt, retry_if_exception, wait_random_exponential
 
 import config
+import usage
 import validation
 from errors import AppError
 from logging_config import redact
@@ -14,7 +15,7 @@ from logging_config import redact
 MAX_ATTEMPTS = 5
 WAIT_MULTIPLIER = 0.5
 WAIT_MIN = 1
-WAIT_MAX = 60
+WAIT_MAX = config.RETRY_WAIT_MAX_SECONDS
 
 
 class ImageProvider(ABC):
@@ -43,7 +44,7 @@ class ImageProvider(ABC):
 class HuggingFaceImageProvider(ImageProvider):
     RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
-    def __init__(self, provider="fal-ai", model="black-forest-labs/FLUX.1-dev", timeout=120):
+    def __init__(self, provider="fal-ai", model="black-forest-labs/FLUX.1-dev", timeout=config.HF_TIMEOUT_SECONDS):
         self.provider = provider
         self.model = model
         # InferenceClient defaults to timeout=None (waits forever), so set one explicitly
@@ -127,13 +128,15 @@ def _wait_strategy(provider):
     return wait
 
 
-def call_image_api(provider: ImageProvider, prompt, observer=None):
-    """Call the provider with retries. If an observer is given, it is told about every
-    real call (the first try and each retry) so each one can be recorded."""
+def call_image_api(provider: ImageProvider, prompt, observer):
+    """Call the provider with retries. Internal: use services.generate_images.
+
+    The observer must come from the service layer. It is told about every real call (the
+    first try and each retry), so each one is limits-checked and recorded before it is made.
+    """
+    usage.require_observer(observer)
 
     def attempt(prompt):
-        if observer is None:
-            return provider.generate(prompt)
         attempt_id = observer.started()
         try:
             image = provider.generate(prompt)
@@ -157,6 +160,7 @@ def generate_image_with_error(prompt, provider=None, observer=None):
     try:
         validation.ensure_generation_enabled()
         validation.validate_image_prompt(prompt)
+        usage.require_observer(observer)
     except (AppError, config.ConfigError) as e:
         return None, getattr(e, "message", None) or str(e)
     try:
@@ -168,8 +172,8 @@ def generate_image_with_error(prompt, provider=None, observer=None):
         return None, redact(message)
 
 
-def generate_image(prompt, provider=None):
-    image, error = generate_image_with_error(prompt, provider)
+def generate_image(prompt, provider=None, observer=None):
+    image, error = generate_image_with_error(prompt, provider, observer)
     if error:
         print(f"Failed to generate image: {error}")
     return image

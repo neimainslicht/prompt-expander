@@ -1,8 +1,10 @@
 import config
+import usage
 import validation
 from errors import AppError
 from logging_config import redact
 from google import genai
+from google.genai import types
 from google.genai.errors import APIError
 from tenacity import (
     retry, stop_after_attempt, retry_if_exception, wait_random_exponential
@@ -18,7 +20,11 @@ def get_client():
     """Create the Gemini client on first use so importing this module never needs API_KEY."""
     global _client
     if _client is None:
-        _client = genai.Client(api_key=config.require_secret("API_KEY"))
+        # The SDK has no timeout by default. A bounded call keeps a request's activity timestamps
+        # moving, so a slow call is not mistaken for a crashed request (see config.MIN_STALE_REQUEST_SECONDS).
+        _client = genai.Client(
+            api_key=config.require_secret("API_KEY"),
+            http_options=types.HttpOptions(timeout=config.GEMINI_TIMEOUT_SECONDS * 1000))  # milliseconds
     return _client
 
 def should_retry_gemini(e: Exception) -> bool:
@@ -38,12 +44,13 @@ def should_retry_gemini(e: Exception) -> bool:
 
 @retry(
     stop=stop_after_attempt(5),
-    wait=wait_random_exponential(multiplier=0.5, min=1, max=60),
+    wait=wait_random_exponential(multiplier=0.5, min=1, max=config.RETRY_WAIT_MAX_SECONDS),
     retry=retry_if_exception(should_retry_gemini),
     reraise=True
 )
 
 def call_gemini(prompt_idea, num_prompts=None, observer=None):
+    usage.require_observer(observer)  # internal: reached only through services.expand_idea
     num_prompts = num_prompts or config.get_settings().max_prompts_per_request
     prompt = f"""
     Given the following concept, create {num_prompts} detailed image generation prompts. Each prompt should include some combination of:
@@ -73,7 +80,7 @@ def call_gemini(prompt_idea, num_prompts=None, observer=None):
 
     client = get_client()
     # the decorator above re-runs this function for every retry, so each real call is reported here
-    attempt_id = observer.started() if observer else None
+    attempt_id = observer.started()
     try:
         response = client.models.generate_content(
             model=GEMINI_MODEL,
@@ -81,14 +88,12 @@ def call_gemini(prompt_idea, num_prompts=None, observer=None):
             config={"response_mime_type": "application/json"}
         )
     except Exception as e:
-        if observer:
-            observer.finished(attempt_id, error=e)
+        observer.finished(attempt_id, error=e)
         raise
-    if observer:
-        meta = getattr(response, "usage_metadata", None)
-        observer.finished(attempt_id,
-                          input_tokens=getattr(meta, "prompt_token_count", None),
-                          output_tokens=getattr(meta, "candidates_token_count", None))
+    meta = getattr(response, "usage_metadata", None)
+    observer.finished(attempt_id,
+                      input_tokens=getattr(meta, "prompt_token_count", None),
+                      output_tokens=getattr(meta, "candidates_token_count", None))
     return response
 
 def generate_prompt_text(prompt_idea, num_prompts=None, observer=None):
@@ -100,11 +105,14 @@ def generate_prompt_text(prompt_idea, num_prompts=None, observer=None):
         validation.ensure_generation_enabled()
         validation.validate_concept(prompt_idea)
         num_prompts = validation.validate_prompt_count(num_prompts)
+        usage.require_observer(observer)
     except (AppError, config.ConfigError) as e:
         return None, getattr(e, "message", None) or str(e)
     try:
         response = call_gemini(prompt_idea=prompt_idea, num_prompts=num_prompts, observer=observer)
         return response.text, None
+    except AppError as e:  # a limit reached before a retry
+        return None, e.message
     except APIError as e:
         if e.code == 429 and "per day" in str(e).lower():
             return None, "Daily API quota exceeded. Please wait until tomorrow or upgrade your plan."

@@ -161,12 +161,12 @@ def test_expand_idea_asks_gemini_for_the_configured_number_and_keeps_that_many(w
     assert result.ok and [p["id"] for p in result.data["prompts"]] == [1, 2, 3, 4]
 
 
-def test_gemini_prompt_text_uses_the_requested_count(monkeypatch):
+def test_gemini_prompt_text_uses_the_requested_count(monkeypatch, permit):
     sent = []
     fake_client = types.SimpleNamespace(models=types.SimpleNamespace(
         generate_content=lambda **kw: sent.append(kw["contents"]) or types.SimpleNamespace(text="{}")))
     monkeypatch.setattr(generatePrompts, "get_client", lambda: fake_client)
-    generatePrompts.call_gemini("a cat", num_prompts=3)
+    generatePrompts.call_gemini("a cat", num_prompts=3, observer=permit("gemini"))
     assert "create 3 detailed" in sent[0]
 
 

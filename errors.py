@@ -47,3 +47,38 @@ class UsageUnavailableError(AppError):
 
     def __init__(self):
         super().__init__("Usage tracking is unavailable, so generation was not started. Please try again later.")
+
+
+class LimitExceededError(AppError):
+    """A rate limit, daily quota or budget would be exceeded, so the call was not made."""
+
+    http_status = 429
+
+    def __init__(self, code, message, retry_after_seconds=None, **details):
+        super().__init__(message, **details)
+        self.code = code
+        self.retry_after_seconds = retry_after_seconds
+
+    def to_dict(self):
+        data = super().to_dict()
+        if self.retry_after_seconds is not None:
+            data["retry_after_seconds"] = self.retry_after_seconds
+        return data
+
+
+class PricingUnavailableError(AppError):
+    """The cost of a paid call can't be determined, so it is refused rather than allowed unmetered."""
+
+    code = "pricing_unavailable"
+    http_status = 503
+
+
+class AuthorizationRequiredError(AppError):
+    """A provider function was called directly, without a request authorised by the service layer."""
+
+    code = "authorization_required"
+    http_status = 500
+
+    def __init__(self):
+        super().__init__("Generation must be started through the service layer (services.py), "
+                         "which enforces limits and records usage.")

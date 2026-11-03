@@ -26,11 +26,14 @@ import config
 import fileUtils
 import generateImage
 import generatePrompts
+import limits
 import usage
 import validation
 from errors import AppError, UsageUnavailableError
 
 logger = logging.getLogger(__name__)
+
+MAX_RATE_LIMIT_WAITS = 3  # how often a batch of ideas waits for the per-minute limit before giving up on an idea
 
 
 @dataclass
@@ -40,7 +43,8 @@ class ExpandResult:
     prompt_file: Optional[str] = None  # path of the saved JSON
     data: Optional[dict] = None
     error: Optional[str] = None
-    error_code: Optional[str] = None  # set when the request was refused by validation
+    error_code: Optional[str] = None  # set when the request was refused (validation, limits, budget)
+    retry_after_seconds: Optional[int] = None  # set when refused by a rate limit that will clear
 
 
 @dataclass
@@ -98,12 +102,20 @@ def expand_idea(idea, num_prompts=None, store=None) -> ExpandResult:
     except config.ConfigError as e:
         return ExpandResult(idea=idea, ok=False, error=str(e), error_code="config_error")
 
+    provider, model = "gemini", generatePrompts.GEMINI_MODEL
     try:
-        request_id = store.begin_request(usage.PROMPT_GENERATION, "gemini", generatePrompts.GEMINI_MODEL, num_prompts)
+        plan = limits.prompt_plan(provider, model)
+        request_id = store.begin_request(usage.PROMPT_GENERATION, provider, model, num_prompts,
+                                         quotas=plan.begin_quotas)
+    except AppError as e:  # a rate limit or provider cap was reached: nothing was started
+        _record_rejection(store, usage.PROMPT_GENERATION, num_prompts, e.code, provider, model)
+        return ExpandResult(idea=idea, ok=False, error=e.message, error_code=e.code,
+                            retry_after_seconds=getattr(e, "retry_after_seconds", None))
     except Exception:
         return ExpandResult(idea=idea, ok=False, error=UsageUnavailableError().message,
                             error_code=UsageUnavailableError.code)
-    observer = usage.AttemptObserver(store, request_id, "gemini", generatePrompts.GEMINI_MODEL)
+    observer = usage.AttemptObserver(store, request_id, provider, model, estimated_cost_micros=plan.attempt_cost_micros,
+                                     quotas=plan.attempt_quotas)
 
     succeeded, category = 0, "interrupted"  # stays "interrupted" only if we are cut off mid-request
     try:
@@ -126,10 +138,13 @@ def expand_idea(idea, num_prompts=None, store=None) -> ExpandResult:
         _finish_request(store, request_id, usage.outcome_for(num_prompts, succeeded), succeeded, category)
 
 
-def expand_ideas(ideas, delay=1.5, on_progress: Optional[Callable] = None, store=None) -> list:
+def expand_ideas(ideas, delay=1.5, on_progress: Optional[Callable] = None, store=None,
+                 on_wait: Optional[Callable] = None) -> list:
     """Expand each idea as its own concept. One failure never stops the rest.
 
     on_progress(idea, None) is called before each idea and on_progress(idea, result) after.
+    When the per-minute request limit is reached the batch waits for it to clear;
+    on_wait(idea, seconds) is called just before each such wait so a UI can say so.
     Raises GenerationDisabledError up front if generation is switched off.
     """
     validation.ensure_generation_enabled()
@@ -140,6 +155,14 @@ def expand_ideas(ideas, delay=1.5, on_progress: Optional[Callable] = None, store
         if on_progress:
             on_progress(idea, None)
         result = expand_idea(idea, store=store)
+        for _ in range(MAX_RATE_LIMIT_WAITS):
+            if result.error_code != "rate_limited" or not result.retry_after_seconds:
+                break
+            wait = min(result.retry_after_seconds, 60)  # the per-minute window will clear
+            if on_wait:
+                on_wait(idea, wait)
+            time.sleep(wait)
+            result = expand_idea(idea, store=store)
         results.append(result)
         if on_progress:
             on_progress(idea, result)
@@ -213,6 +236,7 @@ def generate_images(prompt_data, prompt_ids, provider=None, on_progress: Optiona
         try:
             validation.ensure_generation_enabled()
             validation.validate_image_count(len(prompt_ids))
+            validation.validate_unique_prompt_ids(prompt_ids)
             for prompt_id in prompt_ids:
                 if prompt_id in prompts:
                     validation.validate_image_prompt(prompts[prompt_id]["text"], label=f"Prompt {prompt_id}")
@@ -227,12 +251,23 @@ def generate_images(prompt_data, prompt_ids, provider=None, on_progress: Optiona
     except Exception as e:
         provider_error = str(e)
 
-    provider_label, model = "unresolved", None
+    provider_label, model, plan = "unresolved", None, None
     if provider_error is None:
         provider_label, model = provider.usage_identity()
     if prompt_ids:
         try:
-            request_id = store.begin_request(usage.IMAGE_GENERATION, provider_label, model, len(prompt_ids))
+            if provider_error is None:
+                # authorise the whole batch before the first call: limits checked, images and the
+                # cost of one call per image reserved, all in one atomic step
+                plan = limits.image_plan(provider_label, model, len(prompt_ids))
+                request_id = store.begin_request(
+                    usage.IMAGE_GENERATION, provider_label, model, len(prompt_ids), quotas=plan.begin_quotas,
+                    reserved_images=plan.reserved_images, reserved_cost_micros=plan.reserved_cost_micros)
+            else:  # no provider means no calls and nothing to reserve; the failure is still recorded
+                request_id = store.begin_request(usage.IMAGE_GENERATION, provider_label, model, len(prompt_ids))
+        except AppError as e:
+            _record_rejection(store, usage.IMAGE_GENERATION, len(prompt_ids), e.code, provider_label, model)
+            raise
         except Exception:
             raise UsageUnavailableError() from None
 
@@ -253,7 +288,9 @@ def generate_images(prompt_data, prompt_ids, provider=None, on_progress: Optiona
                         image, error = None, provider_error
                         category = "provider_unavailable"
                     else:
-                        observer = usage.AttemptObserver(store, request_id, provider_label, model, item_ref=prompt_id)
+                        observer = usage.AttemptObserver(
+                            store, request_id, provider_label, model, item_ref=prompt_id,
+                            estimated_cost_micros=plan.attempt_cost_micros, quotas=plan.attempt_quotas)
                         image, error = generateImage.generate_image_with_error(
                             prompts[prompt_id]["text"], provider, observer=observer)
                         category = observer.last_error_category or "not_attempted"

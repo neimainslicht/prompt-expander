@@ -6,14 +6,16 @@ of being silently replaced by a default. Importing this module never needs API
 keys or valid settings; they are checked when get_settings() / require_secret()
 is called.
 """
-import math
 import os
 from dataclasses import dataclass
+from decimal import ROUND_FLOOR, Decimal, InvalidOperation
 from functools import lru_cache
 from typing import Mapping, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import load_dotenv
+
+import money
 
 load_dotenv()
 
@@ -37,10 +39,30 @@ DEFAULTS = {
     # application-side caps, not Google's published limits; check yours in AI Studio.
     "GEMINI_MAX_REQUESTS_PER_MINUTE": "5",
     "GEMINI_MAX_REQUESTS_PER_DAY": "50",
-    # Hugging Face (prepaid credits): application-side budget in USD.
-    "HF_MONTHLY_BUDGET_USD": "4.75",
+    "GEMINI_PLAN": "free",  # only the free tier is supported: Gemini is limited by request counts, not spending
+    # Hugging Face (prepaid credits): application-side budget in USD, counted cumulatively (no monthly reset).
+    "HF_BUDGET_USD": "4.75",
     "HF_BUDGET_SAFETY_MARGIN_PERCENT": "10",
+    # A request left "pending" with no activity for this long is treated as abandoned (crashed).
+    "STALE_REQUEST_SECONDS": "900",
 }
+
+# Settings with no default: image generation is refused until they are set.
+# HF_COST_PER_IMAGE_USD: your estimate of what one Hugging Face image call costs (also used for retries).
+
+RENAMED = {"HF_MONTHLY_BUDGET_USD": "HF_BUDGET_USD"}
+
+# Longest a single provider call may take, and the longest pause between retries. The provider
+# modules import these, so the timeouts they apply and the rule below cannot drift apart.
+GEMINI_TIMEOUT_SECONDS = 60
+HF_TIMEOUT_SECONDS = 120
+RETRY_WAIT_MAX_SECONDS = 60
+
+# A request counts as abandoned after STALE_REQUEST_SECONDS with no activity. Activity is recorded
+# when a provider call starts and when it ends, so the longest legitimate silence is one call (or one
+# retry pause). Requiring twice the longest one means a slow but live request is never mistaken for a
+# crashed one and has its reservation released.
+MIN_STALE_REQUEST_SECONDS = 2 * max(GEMINI_TIMEOUT_SECONDS, HF_TIMEOUT_SECONDS, RETRY_WAIT_MAX_SECONDS)
 
 _TRUE = {"true", "1", "yes", "on"}
 _FALSE = {"false", "0", "no", "off"}
@@ -59,13 +81,33 @@ class Settings:
     usage_db_path: str
     gemini_max_requests_per_minute: int
     gemini_max_requests_per_day: int
-    hf_monthly_budget_usd: float  # the balance you are willing to track, before the margin
-    hf_budget_safety_margin_percent: float
+    gemini_plan: str
+    hf_budget_usd: Decimal  # the balance you are willing to track in total (all months), before the margin
+    hf_budget_safety_margin_percent: Decimal
+    hf_cost_per_image_usd: Optional[Decimal]  # None until configured; see pricing.py
+    stale_request_seconds: int
 
     @property
-    def hf_usable_budget_usd(self) -> float:
-        """Budget the app may actually plan to spend: the budget minus the safety margin."""
-        return self.hf_monthly_budget_usd * (1 - self.hf_budget_safety_margin_percent / 100)
+    def hf_budget_micros(self) -> int:
+        return money.usd_to_micros(self.hf_budget_usd)
+
+    @property
+    def hf_usable_budget_micros(self) -> int:
+        """The spending ceiling in whole microdollars: the budget minus the safety margin, rounded
+        down. This is the one place the margin is applied; everything else reads this value."""
+        kept = (Decimal(100) - self.hf_budget_safety_margin_percent) / Decimal(100)
+        return int((Decimal(self.hf_budget_micros) * kept).to_integral_value(rounding=ROUND_FLOOR))
+
+    @property
+    def hf_usable_budget_usd(self) -> Decimal:
+        """Budget the app may actually plan to spend, in USD (exact)."""
+        return money.micros_to_usd(self.hf_usable_budget_micros)
+
+    @property
+    def hf_cost_per_image_micros(self) -> Optional[int]:
+        if self.hf_cost_per_image_usd is None:
+            return None
+        return money.usd_to_micros(self.hf_cost_per_image_usd)
 
 
 def _parse_int(name, raw, minimum=1):
@@ -87,17 +129,25 @@ def _parse_bool(name, raw):
     raise ValueError(f"{name} must be true or false, got {raw!r}.")
 
 
-def _parse_float(name, raw, minimum, maximum=None, exclusive_min=False, exclusive_max=False):
+def _parse_usd(name, raw):
+    """A positive dollar amount with at most 6 decimal places, kept exact as a Decimal."""
     try:
-        value = float(raw.strip())
+        micros = money.usd_to_micros(raw)
     except ValueError:
+        raise ValueError(f"{name} must be a dollar amount with at most 6 decimal places, got {raw!r}.") from None
+    if micros <= 0:
+        raise ValueError(f"{name} must be greater than 0, got {raw!r}.")
+    return money.micros_to_usd(micros)
+
+
+def _parse_percent(name, raw):
+    """A percentage from 0 up to (not including) 100, kept exact as a Decimal."""
+    try:
+        value = Decimal(raw.strip())
+    except InvalidOperation:
         raise ValueError(f"{name} must be a number, got {raw!r}.") from None
-    if not math.isfinite(value):
-        raise ValueError(f"{name} must be a finite number, got {raw!r}.")
-    if value < minimum or (exclusive_min and value == minimum):
-        raise ValueError(f"{name} must be {'greater than' if exclusive_min else 'at least'} {minimum}, got {value}.")
-    if maximum is not None and (value > maximum or (exclusive_max and value == maximum)):
-        raise ValueError(f"{name} must be {'less than' if exclusive_max else 'at most'} {maximum}, got {value}.")
+    if not value.is_finite() or value < 0 or value >= 100:
+        raise ValueError(f"{name} must be at least 0 and less than 100, got {raw!r}.")
     return value
 
 
@@ -117,6 +167,15 @@ def _parse_path(name, raw):
     return path
 
 
+def _parse_gemini_plan(name, raw):
+    plan = raw.strip().lower()
+    if plan != "free":
+        raise ValueError(
+            f"{name} must be 'free'. Spending limits for paid Gemini plans are not supported yet, "
+            f"so the app refuses to run on one by mistake; got {raw!r}.")
+    return plan
+
+
 def load_settings(env: Optional[Mapping[str, str]] = None) -> Settings:
     """Build Settings from env (default: os.environ), checking every value.
 
@@ -125,15 +184,26 @@ def load_settings(env: Optional[Mapping[str, str]] = None) -> Settings:
     env = os.environ if env is None else env
     errors = []
 
-    def read(name, parser, *args, **kwargs):
-        raw = env.get(name)
-        if raw is None:
-            raw = DEFAULTS[name]
+    def read_value(name, raw, parser, *args, **kwargs):
         try:
             return parser(name, raw, *args, **kwargs)
         except ValueError as e:
             errors.append(str(e))
             return None
+
+    def read(name, parser, *args, **kwargs):
+        raw = env.get(name)
+        if raw is None:
+            raw = DEFAULTS[name]
+        return read_value(name, raw, parser, *args, **kwargs)
+
+    for old, new in RENAMED.items():
+        if old in env:
+            errors.append(f"{old} was renamed to {new}. Rename it in your .env file.")
+
+    optional_cost = None
+    if "HF_COST_PER_IMAGE_USD" in env:
+        optional_cost = read_value("HF_COST_PER_IMAGE_USD", env["HF_COST_PER_IMAGE_USD"], _parse_usd)
 
     values = dict(
         generation_enabled=read("GENERATION_ENABLED", _parse_bool),
@@ -147,9 +217,11 @@ def load_settings(env: Optional[Mapping[str, str]] = None) -> Settings:
         usage_db_path=read("USAGE_DB_PATH", _parse_path),
         gemini_max_requests_per_minute=read("GEMINI_MAX_REQUESTS_PER_MINUTE", _parse_int),
         gemini_max_requests_per_day=read("GEMINI_MAX_REQUESTS_PER_DAY", _parse_int),
-        hf_monthly_budget_usd=read("HF_MONTHLY_BUDGET_USD", _parse_float, 0, exclusive_min=True),
-        hf_budget_safety_margin_percent=read(
-            "HF_BUDGET_SAFETY_MARGIN_PERCENT", _parse_float, 0, 100, exclusive_max=True),
+        gemini_plan=read("GEMINI_PLAN", _parse_gemini_plan),
+        hf_budget_usd=read("HF_BUDGET_USD", _parse_usd),
+        hf_budget_safety_margin_percent=read("HF_BUDGET_SAFETY_MARGIN_PERCENT", _parse_percent),
+        hf_cost_per_image_usd=optional_cost,
+        stale_request_seconds=read("STALE_REQUEST_SECONDS", _parse_int, MIN_STALE_REQUEST_SECONDS),
     )
 
     # Relationships between settings: only checkable when both values parsed.

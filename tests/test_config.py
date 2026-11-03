@@ -1,6 +1,7 @@
 """Configuration, credential and secret-redaction tests. No network, no real keys."""
 import io
 import logging
+from decimal import Decimal
 import os
 import subprocess
 import sys
@@ -31,7 +32,7 @@ def test_defaults_match_the_agreed_development_values():
     assert (s.max_concept_length, s.max_image_prompt_length) == (500, 2000)
     assert (s.max_generation_requests_per_minute, s.max_images_per_day) == (3, 5)
     assert s.quota_timezone == "Asia/Jerusalem"
-    assert s.hf_monthly_budget_usd == 4.75
+    assert s.hf_budget_usd == Decimal("4.75")
 
 
 def test_values_can_be_overridden():
@@ -43,9 +44,9 @@ def test_values_can_be_overridden():
 
 
 def test_safety_margin_reduces_usable_hf_budget():
-    s = config.load_settings({"HF_MONTHLY_BUDGET_USD": "4.75", "HF_BUDGET_SAFETY_MARGIN_PERCENT": "10"})
-    assert s.hf_usable_budget_usd == pytest.approx(4.275)
-    assert config.load_settings({"HF_BUDGET_SAFETY_MARGIN_PERCENT": "0"}).hf_usable_budget_usd == 4.75
+    s = config.load_settings({"HF_BUDGET_USD": "4.75", "HF_BUDGET_SAFETY_MARGIN_PERCENT": "10"})
+    assert s.hf_usable_budget_usd == Decimal("4.275") and s.hf_usable_budget_micros == 4_275_000
+    assert config.load_settings({"HF_BUDGET_SAFETY_MARGIN_PERCENT": "0"}).hf_usable_budget_usd == Decimal("4.75")
 
 
 @pytest.mark.parametrize("name,value", [
@@ -54,8 +55,8 @@ def test_safety_margin_reduces_usable_hf_budget():
     ("MAX_GENERATION_REQUESTS_PER_MINUTE", "0"), ("MAX_IMAGES_PER_DAY", "-5"),
     ("GENERATION_ENABLED", "maybe"), ("GENERATION_ENABLED", ""),
     ("QUOTA_TIMEZONE", "Mars/Olympus"), ("QUOTA_TIMEZONE", ""),
-    ("HF_MONTHLY_BUDGET_USD", "0"), ("HF_MONTHLY_BUDGET_USD", "-1"), ("HF_MONTHLY_BUDGET_USD", "nan"),
-    ("HF_MONTHLY_BUDGET_USD", "inf"), ("HF_MONTHLY_BUDGET_USD", "free"),
+    ("HF_BUDGET_USD", "0"), ("HF_BUDGET_USD", "-1"), ("HF_BUDGET_USD", "nan"),
+    ("HF_BUDGET_USD", "inf"), ("HF_BUDGET_USD", "free"),
     ("HF_BUDGET_SAFETY_MARGIN_PERCENT", "100"), ("HF_BUDGET_SAFETY_MARGIN_PERCENT", "-1"),
     ("GEMINI_MAX_REQUESTS_PER_DAY", "0"),
 ])
@@ -73,8 +74,8 @@ def test_inconsistent_limits_are_rejected():
 
 def test_all_problems_are_reported_together():
     with pytest.raises(config.ConfigError) as exc:
-        config.load_settings({"MAX_CONCEPT_LENGTH": "x", "HF_MONTHLY_BUDGET_USD": "-2"})
-    assert "MAX_CONCEPT_LENGTH" in str(exc.value) and "HF_MONTHLY_BUDGET_USD" in str(exc.value)
+        config.load_settings({"MAX_CONCEPT_LENGTH": "x", "HF_BUDGET_USD": "-2"})
+    assert "MAX_CONCEPT_LENGTH" in str(exc.value) and "HF_BUDGET_USD" in str(exc.value)
 
 
 def test_get_settings_reads_environment_and_caches(monkeypatch):
@@ -183,10 +184,10 @@ def test_configure_logging_twice_adds_one_handler():
 
 
 # ---- user-visible errors from providers
-def test_image_error_message_is_redacted(monkeypatch):
+def test_image_error_message_is_redacted(monkeypatch, permit):
     monkeypatch.setenv("HF_TOKEN", FAKE_HF)
     provider = ScriptedProvider([RuntimeError(f"401 for Authorization: Bearer {FAKE_HF}")])
-    image, error = generateImage.generate_image_with_error("p", provider)
+    image, error = generateImage.generate_image_with_error("p", provider, permit())
     assert image is None and FAKE_HF not in error
 
 
@@ -201,9 +202,9 @@ def test_gemini_error_message_is_redacted(monkeypatch):
     assert text is None and FAKE_GEMINI not in error
 
 
-def test_missing_hf_token_error_is_clear(monkeypatch):
+def test_missing_hf_token_error_is_clear(monkeypatch, permit):
     monkeypatch.delenv("HF_TOKEN", raising=False)
-    image, error = generateImage.generate_image_with_error("p", generateImage.HuggingFaceImageProvider())
+    image, error = generateImage.generate_image_with_error("p", generateImage.HuggingFaceImageProvider(), permit())
     assert image is None and "HF_TOKEN is not set" in error
 
 

@@ -33,6 +33,9 @@ class FakeProvider(generateImage.ImageProvider):
     def is_retryable(self, e):
         return self.retryable
 
+    def usage_identity(self):
+        return "huggingface/test", "test-model"
+
 
 @pytest.fixture
 def env(tmp_path, monkeypatch, settings):
@@ -251,10 +254,10 @@ def test_importing_modules_does_not_need_api_keys():
     assert r.returncode == 0, r.stderr
 
 
-def test_missing_api_key_is_an_error_result_not_an_exception(monkeypatch):
+def test_missing_api_key_is_an_error_result_not_an_exception(monkeypatch, permit):
     monkeypatch.setattr(generatePrompts, "_client", None)
     monkeypatch.delenv("API_KEY", raising=False)
-    text, error = generatePrompts.generate_prompt_text("a cat")
+    text, error = generatePrompts.generate_prompt_text("a cat", observer=permit("gemini"))
     assert text is None and "API_KEY" in error
 
 

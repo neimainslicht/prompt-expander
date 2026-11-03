@@ -78,7 +78,7 @@ def test_request_starts_pending_and_defaults_to_the_anonymous_user(store):
     row = store.get_request(rid)
     assert row["outcome"] == usage.PENDING and row["finished_at"] is None
     assert row["user_id"] == usage.ANONYMOUS_USER == "local"
-    assert row["estimated_cost_usd"] is None and row["actual_cost_usd"] is None
+    assert row["estimated_cost_micros"] is None and row["actual_cost_micros"] is None
 
 
 def test_a_user_id_can_be_attached_for_later(store):

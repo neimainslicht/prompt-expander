@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
 import generateImage
 import generatePrompts
+import usage
 
 
 def make_http_error(code, headers=None):
@@ -37,6 +38,9 @@ class ScriptedProvider(generateImage.ImageProvider):
     def is_retryable(self, e):
         response = getattr(e, "response", None)
         return getattr(response, "status_code", None) in self.retryable_codes
+
+    def usage_identity(self):
+        return "huggingface/test", "test-model"
 
 
 @pytest.fixture(autouse=True)
@@ -70,6 +74,7 @@ def default_settings(monkeypatch, tmp_path_factory):
     """
     for name, value in config.DEFAULTS.items():
         monkeypatch.setenv(name, value)
+    monkeypatch.setenv("HF_COST_PER_IMAGE_USD", "0.05")  # a made-up test price; real use must configure its own
     monkeypatch.setenv("USAGE_DB_PATH", str(tmp_path_factory.mktemp("usage") / "usage.db"))
     config.get_settings.cache_clear()
     yield
@@ -84,3 +89,17 @@ def settings(monkeypatch):
             monkeypatch.setenv(name, str(value))
         config.get_settings.cache_clear()
     return apply
+
+
+@pytest.fixture
+def permit(tmp_path_factory):
+    """permit() returns an observer for a pending request, like the service layer would give.
+
+    For tests of the low-level provider functions, which refuse to run without one.
+    """
+    store = usage.SqliteUsageStore(tmp_path_factory.mktemp("permit") / "usage.db")
+
+    def make(provider="huggingface/test"):
+        request_id = store.begin_request(usage.IMAGE_GENERATION, provider, None, 1)
+        return usage.AttemptObserver(store, request_id, provider)
+    return make

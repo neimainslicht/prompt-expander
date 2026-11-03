@@ -126,54 +126,54 @@ def test_client_built_once_with_timeout(monkeypatch):
 
 # ---- call_image_api / generate_image with a fake provider ----
 
-def test_success_first_try():
+def test_success_first_try(permit):
     p = ScriptedProvider(["IMG"])
-    assert g.generate_image("x", p) == "IMG"
+    assert g.generate_image("x", p, observer=permit()) == "IMG"
     assert p.calls == 1
 
 
-def test_retries_then_succeeds():
+def test_retries_then_succeeds(permit):
     p = ScriptedProvider([make_http_error(503), make_http_error(429), "IMG"])
-    assert g.generate_image("x", p) == "IMG"
+    assert g.generate_image("x", p, observer=permit()) == "IMG"
     assert p.calls == 3
 
 
-def test_gives_up_after_max_attempts():
+def test_gives_up_after_max_attempts(permit):
     p = ScriptedProvider([make_http_error(429)])
-    assert g.generate_image("x", p) is None
+    assert g.generate_image("x", p, observer=permit()) is None
     assert p.calls == g.MAX_ATTEMPTS
 
 
-def test_non_retryable_not_retried():
+def test_non_retryable_not_retried(permit):
     p = ScriptedProvider([make_http_error(401)])
-    assert g.generate_image("x", p) is None
+    assert g.generate_image("x", p, observer=permit()) is None
     assert p.calls == 1
 
 
-def test_call_image_api_reraises_original_error():
+def test_call_image_api_reraises_original_error(permit):
     p = ScriptedProvider([make_http_error(503)])
     with pytest.raises(type(make_http_error(503))):  # reraise=True, not RetryError
-        g.call_image_api(p, "x")
+        g.call_image_api(p, "x", permit())
     assert p.calls == g.MAX_ATTEMPTS
 
 
-def test_unexpected_exception_returns_none():
+def test_unexpected_exception_returns_none(permit):
     p = ScriptedProvider([RuntimeError("bad")])
-    assert g.generate_image("x", p) is None
+    assert g.generate_image("x", p, observer=permit()) is None
     assert p.calls == 1
 
 
-def test_generate_image_accepts_provider_name(monkeypatch):
+def test_generate_image_accepts_provider_name(monkeypatch, permit):
     fake = ScriptedProvider(["IMG"])
     monkeypatch.setitem(g.PROVIDERS, "fake", lambda: fake)
-    assert g.generate_image("x", "fake") == "IMG"
+    assert g.generate_image("x", "fake", observer=permit()) == "IMG"
 
 
-def test_generate_image_unknown_provider_name_returns_none():
-    assert g.generate_image("x", "nope") is None
+def test_generate_image_unknown_provider_name_returns_none(permit):
+    assert g.generate_image("x", "nope", observer=permit()) is None
 
 
-def test_failure_messages_printed(capsys):
-    g.generate_image("x", g.HuggingFaceImageProvider.__new__(g.HuggingFaceImageProvider))
+def test_failure_messages_printed(capsys, permit):
+    g.generate_image("x", g.HuggingFaceImageProvider.__new__(g.HuggingFaceImageProvider), observer=permit())
     # a bare, uninitialised provider fails inside generate; must be caught
     assert "Failed to generate image" in capsys.readouterr().out

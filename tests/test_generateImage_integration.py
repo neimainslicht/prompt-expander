@@ -26,10 +26,10 @@ def fake_image():
     return Image.new("RGB", (8, 8), "red")
 
 
-def run_generation_loop(prompt_json, provider=None):
+def run_generation_loop(prompt_json, permit, provider=None):
     """Mirrors main.process_image_generation (main.py runs its menu on import)."""
     for prompt in prompt_json["prompts"]:
-        image = g.generate_image(prompt["text"], provider)
+        image = g.generate_image(prompt["text"], provider, observer=permit())
         if image:
             fileUtils.saveImage(image, prompt_json["concept"], prompt["id"])
             fileUtils.updatePromptStatus(prompt_json, prompt["id"], "generated")
@@ -43,7 +43,7 @@ def make_prompt_json(n=3):
     return fileUtils.parseJSON(raw, "Test Concept")
 
 
-def test_real_provider_retries_through_real_client(workdir, monkeypatch):
+def test_real_provider_retries_through_real_client(workdir, monkeypatch, permit):
     calls = []
 
     def flaky(self, prompt, **kwargs):
@@ -53,21 +53,21 @@ def test_real_provider_retries_through_real_client(workdir, monkeypatch):
         return fake_image()
 
     monkeypatch.setattr(g.InferenceClient, "text_to_image", flaky)
-    image = g.generate_image("a cat", g.HuggingFaceImageProvider())
+    image = g.generate_image("a cat", g.HuggingFaceImageProvider(), observer=permit())
     assert isinstance(image, Image.Image)
     assert len(calls) == 3
     assert calls[0][1]["model"] == "black-forest-labs/FLUX.1-dev"
 
 
-def test_real_client_receives_provider_key_and_timeout(workdir, monkeypatch):
+def test_real_client_receives_provider_key_and_timeout(workdir, monkeypatch, permit):
     monkeypatch.setattr(g.InferenceClient, "text_to_image", lambda self, p, **kw: fake_image())
     provider = g.HuggingFaceImageProvider(provider="fal-ai", timeout=33)
-    g.generate_image("a cat", provider)
+    g.generate_image("a cat", provider, observer=permit())
     assert provider.client.provider == "fal-ai"
     assert provider.client.timeout == 33
 
 
-def test_full_flow_mixed_results_persist_statuses(workdir, monkeypatch):
+def test_full_flow_mixed_results_persist_statuses(workdir, monkeypatch, permit):
     outcomes = {
         "prompt 0": [fake_image()],
         "prompt 1": [make_http_error(401)],                        # non-retryable -> failed
@@ -82,7 +82,7 @@ def test_full_flow_mixed_results_persist_statuses(workdir, monkeypatch):
 
     monkeypatch.setattr(g.InferenceClient, "text_to_image", scripted)
     data = make_prompt_json()
-    run_generation_loop(data, g.HuggingFaceImageProvider())
+    run_generation_loop(data, permit, g.HuggingFaceImageProvider())
 
     saved = list((workdir / "output").glob("*.json"))
     assert len(saved) == 1
@@ -91,25 +91,25 @@ def test_full_flow_mixed_results_persist_statuses(workdir, monkeypatch):
     assert len(list((workdir / "output" / "images").glob("*.png"))) == 2
 
 
-def test_loop_survives_exhausted_retries(workdir, monkeypatch):
+def test_loop_survives_exhausted_retries(workdir, monkeypatch, permit):
     def always_429(self, prompt, **kwargs):
         raise make_http_error(429)
 
     monkeypatch.setattr(g.InferenceClient, "text_to_image", always_429)
     data = make_prompt_json(2)
-    run_generation_loop(data, g.HuggingFaceImageProvider())  # must not raise
+    run_generation_loop(data, permit, g.HuggingFaceImageProvider())  # must not raise
     assert [p["status"] for p in data["prompts"]] == ["failed", "failed"]
     assert not (workdir / "output" / "images").exists()
 
 
-def test_missing_token_marks_failed_without_crashing(workdir, monkeypatch):
+def test_missing_token_marks_failed_without_crashing(workdir, monkeypatch, permit):
     monkeypatch.delenv("HF_TOKEN", raising=False)
     data = make_prompt_json(1)
-    run_generation_loop(data, g.HuggingFaceImageProvider())
+    run_generation_loop(data, permit, g.HuggingFaceImageProvider())
     assert data["prompts"][0]["status"] == "failed"
 
 
-def test_swapping_in_another_provider(workdir, monkeypatch):
+def test_swapping_in_another_provider(workdir, monkeypatch, permit):
     """A new provider only needs the ImageProvider interface; retry layer is reused."""
     class OtherProvider(g.ImageProvider):
         def __init__(self):
@@ -127,7 +127,7 @@ def test_swapping_in_another_provider(workdir, monkeypatch):
     monkeypatch.setitem(g.PROVIDERS, "other", OtherProvider)
     monkeypatch.setenv("IMAGE_PROVIDER", "other")
     data = make_prompt_json(1)
-    run_generation_loop(data)  # provider resolved from env
+    run_generation_loop(data, permit)  # provider resolved from env
     assert data["prompts"][0]["status"] == "generated"
 
 
@@ -135,7 +135,7 @@ def test_swapping_in_another_provider(workdir, monkeypatch):
     os.getenv("RUN_LIVE_HF") != "1" or not os.getenv("HF_TOKEN"),
     reason="live HF call; set RUN_LIVE_HF=1 and HF_TOKEN (spends credits)",
 )
-def test_live_hugging_face(tmp_path, monkeypatch):
+def test_live_hugging_face(tmp_path, monkeypatch, permit):
     monkeypatch.chdir(tmp_path)
-    image = g.generate_image("a small red circle on a white background")
+    image = g.generate_image("a small red circle on a white background", observer=permit())
     assert isinstance(image, Image.Image)
